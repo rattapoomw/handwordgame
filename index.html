@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-  <title>AR เรียงประโยคภาษาไทย — Improved Gesture v2</title>
+  <title>AR เรียงประโยคภาษาไทย — Sticky Drag v3</title>
 
   <!-- Tailwind CSS (CDN) -->
   <script src="https://cdn.tailwindcss.com"></script>
@@ -259,6 +259,8 @@
         graspActive: false,
         lastGrabAttemptAt: 0,
         grabAttemptCooldownMs: 180,
+        openReleaseFrames: 0,
+        openReleaseFramesRequired: 4,
         cursor: {
           x: 0,
           y: 0,
@@ -757,25 +759,35 @@
         state.latestLandmarks = landmarks;
         state.handConnections = window.HAND_CONNECTIONS || null;
 
-        // selfieMode=true + ภาพวิดีโอเป็นกระจก:
-        // landmark x ใช้ตรง ๆ เพื่อให้เคอร์เซอร์ตรงกับภาพที่เห็น
-        const indexTip = landmarks[8];
-        const targetX = indexTip.x * state.canvasWidth;
-        const targetY = indexTip.y * state.canvasHeight;
+        const gesture = classifyGesture(landmarks);
+        state.handGesture = gesture;
 
-        // Smooth cursor เพื่อลดการสั่น
+        // ใช้จุดควบคุมที่เหมาะกับ gesture เพื่อลดการกระโดดขณะจีบ
+        let controlPoint = landmarks[8];
+        if (gesture === "pinch") {
+          controlPoint = {
+            x: (landmarks[4].x + landmarks[8].x) / 2,
+            y: (landmarks[4].y + landmarks[8].y) / 2
+          };
+        } else if (gesture === "grasp") {
+          controlPoint = {
+            x: (landmarks[0].x + landmarks[5].x + landmarks[9].x + landmarks[13].x + landmarks[17].x) / 5,
+            y: (landmarks[0].y + landmarks[5].y + landmarks[9].y + landmarks[13].y + landmarks[17].y) / 5
+          };
+        }
+
+        const targetX = controlPoint.x * state.canvasWidth;
+        const targetY = controlPoint.y * state.canvasHeight;
+
         if (!state.cursor.visible || !Number.isFinite(state.cursor.x)) {
           state.cursor.x = targetX;
           state.cursor.y = targetY;
         } else {
-          const smoothing = 0.36;
+          const smoothing = state.selectedCardId ? 0.58 : 0.36;
           state.cursor.x += (targetX - state.cursor.x) * smoothing;
           state.cursor.y += (targetY - state.cursor.y) * smoothing;
         }
         state.cursor.visible = true;
-
-        const gesture = classifyGesture(landmarks);
-        state.handGesture = gesture;
       }
 
       function angleDegrees(a, b, c) {
@@ -852,31 +864,48 @@
           state.gestureLatched = false;
           state.pinchActive = false;
           state.graspActive = false;
+          state.openReleaseFrames = 0;
           return;
         }
 
         const now = performance.now();
         const gesture = state.handGesture;
         const grabGesture = gesture === "pinch" || gesture === "grasp";
-        const wasGrabGesture = state.previousGesture === "pinch" || state.previousGesture === "grasp";
-        const canAttemptGrab = now - state.lastGrabAttemptAt >= state.grabAttemptCooldownMs;
+        const wasGrabGesture =
+          state.previousGesture === "pinch" || state.previousGesture === "grasp";
+        const canAttemptGrab =
+          now - state.lastGrabAttemptAt >= state.grabAttemptCooldownMs;
 
-        // รองรับทั้งเล็งก่อนจีบ และจีบค้างแล้วเลื่อนเข้าเป้าหมาย
         if (grabGesture && !state.selectedCardId && canAttemptGrab) {
           const target = currentHoverTarget();
           if (target || !wasGrabGesture) {
             state.lastGrabAttemptAt = now;
-            state.gestureLatched = pickupAt(state.cursor.x, state.cursor.y, "hand");
+            state.gestureLatched = pickupAt(
+              state.cursor.x,
+              state.cursor.y,
+              "hand"
+            );
           }
         }
 
-        if (grabGesture && state.selectedCardId) {
+        // Sticky drag: หลังหยิบสำเร็จ การ์ดตามเคอร์เซอร์ทุกเฟรม
+        if (state.selectedCardId) {
           moveSelected(state.cursor.x, state.cursor.y);
-        }
 
-        if (gesture === "open") {
-          if (state.selectedCardId) releaseSelected();
-          state.gestureLatched = false;
+          if (gesture === "open") {
+            state.openReleaseFrames += 1;
+          } else {
+            state.openReleaseFrames = 0;
+          }
+
+          // ต้องกางมือชัดเจน 4 เฟรมจึงปล่อย
+          if (state.openReleaseFrames >= state.openReleaseFramesRequired) {
+            releaseSelected();
+            state.gestureLatched = false;
+            state.openReleaseFrames = 0;
+          }
+        } else {
+          state.openReleaseFrames = 0;
         }
 
         if (!grabGesture && gesture === "neutral") {
