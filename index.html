@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-  <title>AR เรียงประโยคภาษาไทย</title>
+  <title>AR เรียงประโยคภาษาไทย — Improved Gesture v2</title>
 
   <!-- Tailwind CSS (CDN) -->
   <script src="https://cdn.tailwindcss.com"></script>
@@ -255,6 +255,10 @@
         handGesture: "none", // none | open | pinch | grasp
         previousGesture: "none",
         gestureLatched: false,
+        pinchActive: false,
+        graspActive: false,
+        lastGrabAttemptAt: 0,
+        grabAttemptCooldownMs: 180,
         cursor: {
           x: 0,
           y: 0,
@@ -774,6 +778,28 @@
         state.handGesture = gesture;
       }
 
+      function angleDegrees(a, b, c) {
+        const abx = a.x - b.x;
+        const aby = a.y - b.y;
+        const cbx = c.x - b.x;
+        const cby = c.y - b.y;
+        const dot = abx * cbx + aby * cby;
+        const magAB = Math.hypot(abx, aby);
+        const magCB = Math.hypot(cbx, cby);
+        if (magAB < 1e-6 || magCB < 1e-6) return 180;
+        const cosine = clamp(dot / (magAB * magCB), -1, 1);
+        return Math.acos(cosine) * 180 / Math.PI;
+      }
+
+      function fingerExtended(lm, mcp, pip, dip, tip) {
+        const pipAngle = angleDegrees(lm[mcp], lm[pip], lm[dip]);
+        const dipAngle = angleDegrees(lm[pip], lm[dip], lm[tip]);
+        const wristDistanceTip = distance2D(lm[0], lm[tip]);
+        const wristDistancePip = distance2D(lm[0], lm[pip]);
+        return pipAngle > 145 && dipAngle > 145 &&
+               wristDistanceTip > wristDistancePip * 1.08;
+      }
+
       function classifyGesture(lm) {
         const wrist = lm[0];
         const thumbTip = lm[4];
@@ -782,42 +808,41 @@
         const ringTip = lm[16];
         const pinkyTip = lm[20];
 
-        // ขนาดฝ่ามือใช้ normalize threshold ให้รองรับมือใกล้/ไกลกล้อง
-        const palmSize = Math.max(distance2D(wrist, lm[9]), 0.045);
+        const palmWidth = distance2D(lm[5], lm[17]);
+        const palmLength = distance2D(wrist, lm[9]);
+        const handScale = Math.max((palmWidth + palmLength) * 0.5, 0.04);
+        const pinchRatio = distance2D(thumbTip, indexTip) / handScale;
 
-        // ระยะนิ้วโป้งถึงปลายนิ้วทั้ง 4 ด้วยสูตรพีทาโกรัส
-        const thumbToIndex = distance2D(thumbTip, indexTip) / palmSize;
-        const thumbToMiddle = distance2D(thumbTip, middleTip) / palmSize;
-        const thumbToRing = distance2D(thumbTip, ringTip) / palmSize;
-        const thumbToPinky = distance2D(thumbTip, pinkyTip) / palmSize;
+        // Hysteresis: เริ่มจีบและคลายจีบใช้คนละ threshold ลดอาการสั่น
+        state.pinchActive = state.pinchActive
+          ? pinchRatio < 0.68
+          : pinchRatio < 0.48;
 
-        // Pinch: โป้งแตะชี้
-        const pinch = thumbToIndex < 0.48;
+        const indexExtended = fingerExtended(lm, 5, 6, 7, 8);
+        const middleExtended = fingerExtended(lm, 9, 10, 11, 12);
+        const ringExtended = fingerExtended(lm, 13, 14, 15, 16);
+        const pinkyExtended = fingerExtended(lm, 17, 18, 19, 20);
+        const extendedCount = [indexExtended, middleExtended, ringExtended, pinkyExtended].filter(Boolean).length;
 
-        // ตรวจนิ้วงอ: ปลายนิ้วอยู่ใกล้ข้อมือกว่าข้อ PIP
-        const indexCurled = distance2D(indexTip, wrist) < distance2D(lm[6], wrist) * 1.05;
-        const middleCurled = distance2D(middleTip, wrist) < distance2D(lm[10], wrist) * 1.05;
-        const ringCurled = distance2D(ringTip, wrist) < distance2D(lm[14], wrist) * 1.06;
-        const pinkyCurled = distance2D(pinkyTip, wrist) < distance2D(lm[18], wrist) * 1.08;
+        const palmCenter = {
+          x: (lm[0].x + lm[5].x + lm[9].x + lm[13].x + lm[17].x) / 5,
+          y: (lm[0].y + lm[5].y + lm[9].y + lm[13].y + lm[17].y) / 5
+        };
+        const fingertipPalmRatios = [indexTip, middleTip, ringTip, pinkyTip]
+          .map(tip => distance2D(tip, palmCenter) / handScale);
+        const curledNearPalm = fingertipPalmRatios.filter(r => r < 0.92).length;
+        const graspCandidate = extendedCount <= 1 && curledNearPalm >= 3;
 
-        // Grasp: นิ้วส่วนใหญ่พับ และปลายนิ้วหลายจุดเข้าใกล้นิ้วโป้ง
-        const curledCount = [indexCurled, middleCurled, ringCurled, pinkyCurled]
-          .filter(Boolean).length;
-        const thumbCloseCount = [
-          thumbToIndex, thumbToMiddle, thumbToRing, thumbToPinky
-        ].filter(d => d < 1.15).length;
-        const grasp = curledCount >= 3 && thumbCloseCount >= 2;
+        state.graspActive = state.graspActive
+          ? (extendedCount <= 2 && curledNearPalm >= 2)
+          : graspCandidate;
 
-        // Open hand: นิ้วกางเกือบทั้งหมด และนิ้วโป้งไม่แตะนิ้วชี้
-        const extendedCount = [indexCurled, middleCurled, ringCurled, pinkyCurled]
-          .filter(v => !v).length;
-        const open = extendedCount >= 3 &&
-                     thumbToIndex > 0.72 &&
-                     thumbToMiddle > 0.85;
+        const openHand = extendedCount >= 3 && !state.pinchActive &&
+                         fingertipPalmRatios.filter(r => r > 1.0).length >= 3;
 
-        if (pinch) return "pinch";
-        if (grasp) return "grasp";
-        if (open) return "open";
+        if (state.pinchActive) return "pinch";
+        if (state.graspActive) return "grasp";
+        if (openHand) return "open";
         return "neutral";
       }
 
@@ -825,31 +850,36 @@
         if (!state.handDetected || !state.cursor.visible) {
           state.previousGesture = "none";
           state.gestureLatched = false;
+          state.pinchActive = false;
+          state.graspActive = false;
           return;
         }
 
+        const now = performance.now();
         const gesture = state.handGesture;
         const grabGesture = gesture === "pinch" || gesture === "grasp";
-        const wasGrabGesture =
-          state.previousGesture === "pinch" || state.previousGesture === "grasp";
+        const wasGrabGesture = state.previousGesture === "pinch" || state.previousGesture === "grasp";
+        const canAttemptGrab = now - state.lastGrabAttemptAt >= state.grabAttemptCooldownMs;
 
-        // Trigger เฉพาะขอบสัญญาณจากไม่จับ -> จับ ป้องกันการหยิบซ้ำทุกเฟรม
-        if (grabGesture && !wasGrabGesture && !state.gestureLatched) {
-          pickupAt(state.cursor.x, state.cursor.y, "hand");
-          state.gestureLatched = true;
+        // รองรับทั้งเล็งก่อนจีบ และจีบค้างแล้วเลื่อนเข้าเป้าหมาย
+        if (grabGesture && !state.selectedCardId && canAttemptGrab) {
+          const target = currentHoverTarget();
+          if (target || !wasGrabGesture) {
+            state.lastGrabAttemptAt = now;
+            state.gestureLatched = pickupAt(state.cursor.x, state.cursor.y, "hand");
+          }
         }
 
         if (grabGesture && state.selectedCardId) {
           moveSelected(state.cursor.x, state.cursor.y);
         }
 
-        // กางนิ้วเพื่อปล่อย
         if (gesture === "open") {
           if (state.selectedCardId) releaseSelected();
           state.gestureLatched = false;
         }
 
-        if (!grabGesture && gesture !== "neutral") {
+        if (!grabGesture && gesture === "neutral") {
           state.gestureLatched = false;
         }
 
@@ -1234,7 +1264,14 @@
           cameraStatus.textContent = "กำลังหามือของคุณ...";
           cameraStatus.classList.remove("hidden");
         } else if (state.handDetected) {
-          cameraStatus.classList.add("hidden");
+          const labels = {
+            pinch: "ตรวจพบ: จีบนิ้ว 🤏",
+            grasp: "ตรวจพบ: กำมือ ✊",
+            open: "ตรวจพบ: กางมือ 🖐️",
+            neutral: "พบมือแล้ว — เล็งที่คำศัพท์"
+          };
+          cameraStatus.textContent = labels[state.handGesture] || "พบมือแล้ว";
+          cameraStatus.classList.remove("hidden");
         }
       }
 
