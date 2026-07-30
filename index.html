@@ -502,7 +502,7 @@ window.addEventListener('touchend',  ()=>{ MOUSE.down=false; MOUSE.lastMove=perf
    ========================================================================= */
 // kept in the vertical middle band: the bottom of the canvas maps to the very
 // edge of the camera frame, where MediaPipe tracking is least reliable
-const TUT_BTN = ()=>({ w:330*G.s, h:92*G.s, x:G.W/2, y:Math.min(G.H*0.68, G.H-130*G.s) });
+const TUT_BTN = ()=>({ w:330*G.s, h:92*G.s, x:G.W/2, y:Math.min(G.H*0.75, G.H-150*G.s) });
 
 /* nearest card whose (generously padded) box contains the cursor */
 function cardAt(x,y){
