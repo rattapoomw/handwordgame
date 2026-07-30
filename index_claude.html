@@ -1,0 +1,894 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>AR เรียงประโยคไทย — Thai Sentence AR</title>
+
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@400;600;700&family=Sarabun:wght@400;600;700&display=swap" rel="stylesheet">
+
+<!-- MediaPipe Hands -->
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4/hands.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3/camera_utils.js" crossorigin="anonymous"></script>
+
+<!-- Sentence bank: keep thai_sentences.js in the same folder as index.html.
+     Loaded as a plain script (not fetch) so it also works from file://      -->
+<script src="thai_sentences.js"></script>
+
+<style>
+  :root{
+    --glass: rgba(255,255,255,.12);
+    --glass-strong: rgba(255,255,255,.20);
+    --line: rgba(255,255,255,.35);
+  }
+  html,body{height:100%;margin:0;overflow:hidden;background:#070b18;}
+  body{font-family:"Noto Sans Thai","Sarabun",system-ui,sans-serif;-webkit-tap-highlight-color:transparent;}
+  #video{position:fixed;inset:0;width:100%;height:100%;object-fit:cover;transform:scaleX(-1);z-index:0;background:#070b18;}
+  #canvas{position:fixed;inset:0;width:100%;height:100%;z-index:10;touch-action:none;cursor:none;}
+  .layer{position:fixed;inset:0;z-index:20;pointer-events:none;}
+  .glass{background:linear-gradient(160deg,rgba(255,255,255,.16),rgba(255,255,255,.06));
+    backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);
+    border:1px solid var(--line);box-shadow:0 24px 60px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.35);}
+  .btn-glow{box-shadow:0 12px 32px rgba(16,185,129,.45), inset 0 1px 0 rgba(255,255,255,.5);}
+  .fade-in{animation:fade .45s ease both}
+  @keyframes fade{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+  @media (prefers-reduced-motion: reduce){.fade-in{animation:none}}
+  .hidden{display:none!important}
+</style>
+</head>
+<body class="text-white">
+
+<video id="video" playsinline autoplay muted></video>
+<canvas id="canvas"></canvas>
+
+<!-- ===== Top control bar (mouse clickable) ===== -->
+<div class="layer">
+  <div id="topBar" class="hidden absolute top-3 right-3 flex gap-2" style="pointer-events:auto">
+    <button id="btnHint" class="glass rounded-xl px-3 py-2 text-sm font-semibold hover:bg-white/20 transition">เฉลย (H)</button>
+    <button id="btnReset" class="glass rounded-xl px-3 py-2 text-sm font-semibold hover:bg-white/20 transition">เล่นข้อนี้ใหม่</button>
+  </div>
+</div>
+
+<!-- ===== Start screen ===== -->
+<div id="startScreen" class="layer flex items-center justify-center px-5" style="pointer-events:auto">
+  <div class="glass rounded-3xl max-w-lg w-full p-8 text-center fade-in">
+    <div class="text-6xl mb-3">🇹🇭 ✋</div>
+    <h1 class="text-3xl md:text-4xl font-bold tracking-tight">เรียงประโยคไทย ด้วยมือ</h1>
+    <p class="mt-2 text-white/75 leading-relaxed">
+      เกม AR ฝึกเรียงประโยคภาษาไทย · 3 ด่าน ด่านละ 5 ข้อ (3 → 4 → 5 คำ)<br>อ่านประโยคไทยที่ไม่มีการเว้นวรรค แล้วหยิบการ์ดมาเรียงให้ถูกต้อง<br>
+      <span class="text-white/55 text-sm">Grab floating word cards with your hand and build the sentence.</span>
+    </p>
+    <ul class="mt-5 text-left text-sm text-white/80 space-y-1.5">
+      <li>🤏 <b>จีบนิ้ว</b> (นิ้วโป้งแตะนิ้วชี้) หรือ ✊ <b>กำมือ</b> = หยิบการ์ด</li>
+      <li>🖐️ <b>แบมือ</b> = ปล่อยการ์ด</li>
+      <li>🖱️ ไม่มีกล้อง? ใช้เมาส์ลากได้ทันที</li>
+    </ul>
+    <button id="btnStart" class="mt-7 w-full rounded-2xl bg-emerald-500 hover:bg-emerald-400 active:scale-[.99] transition px-6 py-4 text-lg font-bold btn-glow">
+      เริ่มเกม · Start Game
+    </button>
+    <p id="camNote" class="mt-3 text-xs text-white/55">ระบบจะขออนุญาตใช้กล้อง — ภาพทั้งหมดประมวลผลในเครื่องของคุณ</p>
+  </div>
+</div>
+
+<!-- ===== Finish screen ===== -->
+<div id="endScreen" class="layer hidden flex items-center justify-center px-5" style="pointer-events:auto">
+  <div class="glass rounded-3xl max-w-md w-full p-8 text-center fade-in">
+    <div class="text-7xl mb-2">🎉</div>
+    <h2 class="text-4xl font-bold">เก่งมาก!</h2>
+    <p class="mt-2 text-white/75">คุณเล่นครบ <span id="finalCount">15</span> ข้อ · 3 ด่านแล้ว</p>
+    <div class="mt-5 text-5xl font-bold text-amber-300"><span id="finalScore">0</span> <span class="text-2xl text-white/60">คะแนน</span></div>
+    <button id="btnAgain" class="mt-7 w-full rounded-2xl bg-emerald-500 hover:bg-emerald-400 transition px-6 py-4 text-lg font-bold btn-glow">
+      เล่นอีกครั้ง · Play again
+    </button>
+  </div>
+</div>
+
+<script>
+/* =========================================================================
+   AR THAI SENTENCE BUILDER
+   - MediaPipe Hands  → cursor + pinch/fist grab
+   - Mouse / touch    → full fallback
+   - Draw loop (rAF)  → fully independent of onResults()
+   ========================================================================= */
+
+/* ---------------------------- STAGE PLAN ----------------------------
+   3 stages x 5 questions = 15 rounds. Sentences are drawn at random from
+   window.THAI_BANK (thai_sentences.js), filtered by word count.        */
+const STAGES = [
+  { n:3, questions:5, label:'3 คำ' },
+  { n:4, questions:5, label:'4 คำ' },
+  { n:5, questions:5, label:'5 คำ' }
+];
+const POINTS_PER_QUESTION = 100;
+const MAX_WORDS  = Math.max(...STAGES.map(s=>s.n));
+const TOTAL_ROUNDS = STAGES.reduce((a,s)=>a+s.questions, 0);
+
+/* Kept inline so index.html still runs on its own if the bank file is absent */
+const FALLBACK_BANK = { sentences:[
+  {n:3, th:"ฉันกินข้าว", en:"I eat rice", words:[
+    {th:"ฉัน",emoji:"🙋",en:"I / me"},{th:"กิน",emoji:"😋",en:"eat"},{th:"ข้าว",emoji:"🍚",en:"rice"}]},
+  {n:3, th:"แมวกินปลา", en:"The cat eats fish", words:[
+    {th:"แมว",emoji:"🐱",en:"cat"},{th:"กิน",emoji:"😋",en:"eat"},{th:"ปลา",emoji:"🐟",en:"fish"}]},
+  {n:4, th:"นกบินบนท้องฟ้า", en:"The bird flies in the sky", words:[
+    {th:"นก",emoji:"🐦",en:"bird"},{th:"บิน",emoji:"🕊️",en:"fly"},{th:"บน",emoji:"⬆️",en:"on"},{th:"ท้องฟ้า",emoji:"☁️",en:"sky"}]},
+  {n:4, th:"หมาวิ่งในสวน", en:"The dog runs in the garden", words:[
+    {th:"หมา",emoji:"🐶",en:"dog"},{th:"วิ่ง",emoji:"🏃",en:"run"},{th:"ใน",emoji:"📦",en:"in"},{th:"สวน",emoji:"🌳",en:"garden"}]},
+  {n:5, th:"ฉันกินข้าวที่บ้าน", en:"I eat at home", words:[
+    {th:"ฉัน",emoji:"🙋",en:"I / me"},{th:"กิน",emoji:"😋",en:"eat"},{th:"ข้าว",emoji:"🍚",en:"rice"},{th:"ที่",emoji:"📌",en:"at"},{th:"บ้าน",emoji:"🏠",en:"home"}]},
+  {n:5, th:"แม่ทำอาหารในครัว", en:"Mother cooks in the kitchen", words:[
+    {th:"แม่",emoji:"👩",en:"mother"},{th:"ทำ",emoji:"🛠️",en:"make"},{th:"อาหาร",emoji:"🍲",en:"food"},{th:"ใน",emoji:"📦",en:"in"},{th:"ครัว",emoji:"🍳",en:"kitchen"}]}
+]};
+
+function shuffled(arr){
+  const a = arr.slice();
+  for (let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; }
+  return a;
+}
+
+/* Draw 5 distinct sentences per stage → the 15-question playlist */
+function buildPlaylist(){
+  const loaded = !!(window.THAI_BANK && window.THAI_BANK.sentences && window.THAI_BANK.sentences.length);
+  G.bankLoaded = loaded;
+  if (!loaded) console.warn('thai_sentences.js not found — using the 6 built-in sentences.');
+  const bank = (loaded ? window.THAI_BANK : FALLBACK_BANK).sentences;
+
+  G.playlist = [];
+  STAGES.forEach((st, si)=>{
+    let pool = bank.filter(s => s.n === st.n);
+    if (!pool.length) pool = bank.slice();          // stage length missing → any sentence
+    const bag = shuffled(pool);                     // no repeats within a stage
+    for (let q=0; q<st.questions; q++){
+      G.playlist.push(Object.assign({}, bag[q % bag.length], { stage:si, q }));
+    }
+  });
+}
+
+/* ---------------------------- ELEMENTS ---------------------------- */
+const video      = document.getElementById('video');
+const canvas     = document.getElementById('canvas');
+const ctx        = canvas.getContext('2d');
+const startScreen= document.getElementById('startScreen');
+const endScreen  = document.getElementById('endScreen');
+const topBar     = document.getElementById('topBar');
+
+/* ---------------------------- GAME STATE ---------------------------- */
+const G = {
+  screen : 'start',          // start | tutorial | play | win | done
+  level  : 0,                // index into the 15-question playlist
+  playlist : [],
+  solved : 0,
+  bankLoaded : false,
+  score  : 0,
+  cards  : [],
+  slots  : [],
+  held   : null,
+  hover  : null,
+  grabOff: {x:0,y:0},
+  banner : null,             // {text, sub, t}
+  lockedUntil : 0,
+  hintUntil   : 0,
+  particles   : [],
+  seed   : 1013,
+  aiState: 'idle',           // idle | loading | ready | unavailable
+  fps    : 60,
+  s      : 1, W:0, H:0, cardW:0, cardH:0
+};
+
+/* ---------------------------- INPUT ---------------------------- */
+const P = {                      // unified pointer
+  x:0, y:0, rx:0, ry:0,          // rx/ry = raw target, x/y = smoothed
+  down:false, prevDown:false, pressed:false, released:false,
+  active:false, mode:'none',     // 'hand' | 'mouse' | 'none'
+  lastMode:'none', needRelease:false
+};
+const HAND = { landmarks:null, lastSeen:0, acquiredAt:0, grabbing:false,
+               pinchRatio:1.4, pinchEMA:1.4, curled:0 };
+const MOUSE= { x:0, y:0, down:false, lastMove:-9999 };
+
+/* =========================================================================
+   1. CAMERA + MEDIAPIPE
+   ========================================================================= */
+let hands = null, camera = null, cameraReady = false;
+
+async function initHands(){
+  if (typeof Hands === 'undefined') throw new Error('MediaPipe not loaded');
+  hands = new Hands({ locateFile:(f)=>`https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4/${f}` });
+  hands.setOptions({
+    maxNumHands:1, modelComplexity:1,
+    minDetectionConfidence:0.6, minTrackingConfidence:0.6
+  });
+  hands.onResults(onResults);                    // ← only stores data, never draws
+
+  camera = new Camera(video, {
+    onFrame: async ()=>{ try{ await hands.send({image:video}); }catch(e){} },
+    width:640, height:480
+  });
+  await camera.start();
+  cameraReady = true;
+}
+
+/* onResults: pure data intake. No drawing here. */
+function onResults(res){
+  const now = performance.now();
+  G.aiState = 'ready';                                  // first callback = model warm
+  if (res.multiHandLandmarks && res.multiHandLandmarks.length){
+    // fresh acquisition? give the tracker a moment before trusting the gesture
+    if (!HAND.landmarks || now - HAND.lastSeen > 400){
+      HAND.acquiredAt = now; HAND.pinchEMA = 1.4; HAND.grabbing = false;
+    }
+    HAND.landmarks = res.multiHandLandmarks[0];
+    HAND.lastSeen  = now;
+    updateGesture(HAND.landmarks, now);
+  } else {
+    HAND.landmarks = null;
+    HAND.grabbing  = false;
+  }
+}
+
+/* ---- gesture recognition: forgiving pinch + fist, with hysteresis ---- */
+function d3(a,b){ const dx=a.x-b.x, dy=a.y-b.y, dz=(a.z||0)-(b.z||0); return Math.hypot(dx,dy,dz); }
+function d2(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
+
+function updateGesture(lm, now){
+  const palm = Math.max(1e-4, d2(lm[0], lm[9]));      // scale-invariant reference
+  const raw  = d2(lm[4], lm[8]) / palm;               // ~0.3 closed · ~1.6 open
+  HAND.pinchEMA += (raw - HAND.pinchEMA) * 0.5;       // kill single-frame noise
+  const pinch = HAND.pinchEMA;
+  HAND.pinchRatio = pinch;
+
+  const tips=[8,12,16,20], pips=[6,10,14,18];
+  let curled=0, extended=0;
+  for (let i=0;i<4;i++){
+    const tipD = d2(lm[tips[i]], lm[0]), pipD = d2(lm[pips[i]], lm[0]);
+    if (tipD < pipD * 1.03) curled++; else extended++;
+  }
+  HAND.curled = curled;
+
+  // landmarks are unreliable for ~250 ms after the hand is first found
+  if (now - HAND.acquiredAt < 250){ HAND.grabbing = false; return; }
+
+  const on = HAND.grabbing;
+  const isPinch  = pinch  < (on ? 0.90 : 0.62);       // loose thresholds
+  const isFist   = curled >= (on ? 2 : 3);
+  const isSpread = extended >= 4 && pinch > 0.95;     // open palm = release
+
+  HAND.grabbing = isSpread ? false : (isPinch || isFist);
+}
+
+/* ---- map normalised landmark → canvas px (object-fit:cover + mirror) ---- */
+function mapPoint(nx, ny){
+  const vw = video.videoWidth || 640, vh = video.videoHeight || 480;
+  const va = vw/vh, ca = G.W/G.H;
+  let dw, dh, ox, oy;
+  if (va > ca){ dh = G.H; dw = G.H*va; ox = (G.W-dw)/2; oy = 0; }
+  else        { dw = G.W; dh = G.W/va; ox = 0; oy = (G.H-dh)/2; }
+  return { x: ox + (1-nx)*dw, y: oy + ny*dh };        // 1-nx → mirrored view
+}
+
+/* =========================================================================
+   2. LAYOUT
+   ========================================================================= */
+function resize(){
+  const dpr = Math.min(window.devicePixelRatio||1, 2);
+  G.W = window.innerWidth; G.H = window.innerHeight;
+  canvas.width = G.W*dpr; canvas.height = G.H*dpr;
+  canvas.style.width = G.W+'px'; canvas.style.height = G.H+'px';
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+
+  G.s = Math.max(0.55, Math.min(G.W/1100, G.H/760));
+  G.cardW = 148*G.s; G.cardH = 158*G.s;
+
+  // shrink the card so the widest stage (5 slots) always fits the centre row
+  const maxN = MAX_WORDS;
+  const gap = 16*G.s, avail = G.W - 44*G.s;
+  if (maxN*G.cardW + (maxN-1)*gap > avail){
+    G.cardW = Math.max(64, (avail-(maxN-1)*gap)/maxN);
+    G.cardH = G.cardW*158/148;
+  }
+  layoutLevel();
+}
+window.addEventListener('resize', resize);
+
+/* seeded RNG → the scatter is reproducible, so a window resize rearranges the
+   cards to the same relative pattern instead of reshuffling the board         */
+function mulberry32(a){
+  return function(){
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a>>>15, 1 | a);
+    t = t + Math.imul(t ^ t>>>7, 61 | t) ^ t;
+    return ((t ^ t>>>14) >>> 0) / 4294967296;
+  };
+}
+
+function layoutLevel(){
+  if (!G.slots.length) return;
+
+  // ---- slot row: horizontally + vertically centred ----
+  const n = G.slots.length, gap = 16*G.s;
+  const total = n*G.cardW + (n-1)*gap;
+  const sx = (G.W-total)/2, sy = G.H*0.5;
+  G.slots.forEach((s,i)=>{ s.x = sx + i*(G.cardW+gap) + G.cardW/2; s.y = sy; });
+
+  scatterCards();
+  syncTargets();
+}
+
+/* Cards rest scattered around the centre row: never over the slots, never
+   against a screen edge, and spread apart from each other.                  */
+function scatterCards(){
+  const rnd = mulberry32(G.seed);
+  const hw = G.cardW/2, hh = G.cardH/2;
+
+  // safe rect — top clears the HUD panel, bottom clears the status bar
+  const minX = 34*G.s + hw,        maxX = G.W - 34*G.s - hw;
+  const minY = 138*G.s + hh,       maxY = G.H - 96*G.s - hh;
+
+  // keep-out band around the slot row
+  const s0=G.slots[0], s1=G.slots[G.slots.length-1];
+  const bx0 = s0.x-hw-G.cardW*0.30, bx1 = s1.x+hw+G.cardW*0.30;
+  const by0 = s0.y-hh-G.cardH*0.32, by1 = s0.y+hh+G.cardH*0.32;
+
+  const placed = [];
+  G.cards.forEach(c=>{
+    let best={x:G.W/2,y:minY}, bestScore=-Infinity;
+    for (let k=0;k<200;k++){
+      const x = minX + rnd()*Math.max(1, maxX-minX);
+      const y = minY + rnd()*Math.max(1, maxY-minY);
+      const hitsSlots = !(x+hw < bx0 || x-hw > bx1 || y+hh < by0 || y-hh > by1);
+      let score = hitsSlots ? -1e4 : 0;
+      if (placed.length){                                  // spread cards apart
+        let minD = Infinity;
+        for (const p of placed) minD = Math.min(minD, Math.hypot(x-p.x, y-p.y));
+        score += Math.min(minD, G.cardW*1.7);
+      }
+      score += Math.min(x-minX, maxX-x, y-minY, maxY-y) * 0.45;   // stay off the edges
+      if (score > bestScore){ bestScore = score; best = {x,y}; }
+    }
+    c.home.x = best.x; c.home.y = best.y;
+    c.rot = (rnd()*2-1)*0.15;
+    placed.push(best);
+  });
+}
+
+/* =========================================================================
+   3. LEVEL BUILD / LOGIC
+   ========================================================================= */
+function buildLevel(idx){
+  const lv = G.playlist[idx];
+  if (!lv) return;
+  G.seed  = 1013 + idx*7919 + Math.floor(Math.random()*1000);   // new pattern each play
+  G.slots = lv.words.map((w,i)=>({ i, x:0, y:0, flash:0 }));
+
+  const order = lv.words.map((w,i)=>i);
+  for (let i=order.length-1;i>0;i--){                 // shuffle
+    const j = Math.floor(Math.random()*(i+1)); [order[i],order[j]]=[order[j],order[i]];
+  }
+  if (order.every((v,i)=>v===i) && order.length>1) [order[0],order[1]]=[order[1],order[0]];
+
+  G.cards = order.map((wi,i)=>{
+    const w = lv.words[wi];
+    return {
+      id:i, wi, th:w.th, en:w.en, emoji:w.emoji,
+      x:G.W/2, y:G.H/2, rot:0, tilt:0,
+      home:{x:0,y:0}, slot:null, lift:0, wrong:0, pop:0
+    };
+  });
+  G.held = null; G.hover = null; G.banner = null;
+  layoutLevel();
+  // deal outward from the centre row — settles in ~0.3 s
+  G.cards.forEach(c=>{ c.x = G.W/2; c.y = G.slots[0].y; c.pop = 1; });
+}
+
+function cardInSlot(i){ return G.cards.find(c=>c.slot===i) || null; }
+
+function place(card, slotIdx){
+  const prev = card.slot;
+  if (slotIdx !== null){
+    const occ = cardInSlot(slotIdx);
+    if (occ && occ !== card) occ.slot = prev;         // swap (prev may be null → home)
+  }
+  card.slot = slotIdx;
+  syncTargets();
+}
+
+function syncTargets(){
+  G.cards.forEach(c=>{
+    if (c === G.held) return;
+    if (c.slot !== null && G.slots[c.slot]){ c.tx = G.slots[c.slot].x; c.ty = G.slots[c.slot].y; }
+    else { c.tx = c.home.x; c.ty = c.home.y; }
+  });
+}
+
+function checkAnswer(){
+  if (G.cards.some(c=>c.slot===null)) return;
+  const ok = G.slots.every((s,i)=>{ const c = cardInSlot(i); return c && c.wi === i; });
+
+  if (ok){
+    G.score += POINTS_PER_QUESTION;
+    G.solved++;
+    G.screen = 'win';
+    const cur  = G.playlist[G.level];
+    const last = cur.q === STAGES[cur.stage].questions - 1;   // stage cleared?
+    G.banner = {
+      text: last ? `ผ่านด่าน ${cur.stage+1}!` : 'เก่งมาก!',
+      sub : cur.words.map(w=>w.th).join('  '),                // spaced = the segmentation
+      t   : performance.now()
+    };
+    burst();
+    setTimeout(()=>{
+      G.level++;
+      if (G.level >= G.playlist.length){ G.screen='done'; showEnd(); }
+      else { G.screen='play'; buildLevel(G.level); }
+    }, last ? 2500 : 1900);
+  } else {
+    G.slots.forEach((s,i)=>{ const c=cardInSlot(i); if (!c || c.wi!==i){ s.flash=1; if(c) c.wrong=1; } });
+    G.lockedUntil = performance.now()+700;
+    setTimeout(()=>{
+      G.cards.forEach(c=>{ if (c.slot!==null && c.wi!==c.slot){ c.slot=null; c.wrong=0; } });
+      syncTargets();
+    }, 750);
+  }
+}
+
+function burst(){
+  const colors=['#fbbf24','#34d399','#60a5fa','#f472b6','#ffffff'];
+  for (let i=0;i<90;i++){
+    const a = Math.random()*Math.PI*2, sp = 2+Math.random()*7;
+    G.particles.push({ x:G.W/2, y:G.H*0.5, vx:Math.cos(a)*sp, vy:Math.sin(a)*sp-3,
+      life:1, size:(3+Math.random()*5)*G.s, c:colors[i%colors.length] });
+  }
+}
+
+/* =========================================================================
+   4. POINTER (hand ⇄ mouse arbitration)
+   ========================================================================= */
+function updatePointer(now, dt){
+  const handFresh  = HAND.landmarks && (now - HAND.lastSeen) < 400 && video.videoWidth > 0;
+  const mouseFresh = (now - MOUSE.lastMove) < 1200 || MOUSE.down;
+
+  if (mouseFresh)      P.mode='mouse';
+  else if (handFresh)  P.mode='hand';
+  else                 P.mode='none';
+
+  if (P.mode==='hand'){
+    const tip = mapPoint(HAND.landmarks[8].x, HAND.landmarks[8].y);
+    P.rx=tip.x; P.ry=tip.y; P.down=HAND.grabbing; P.active=true;
+  } else if (P.mode==='mouse'){
+    P.rx=MOUSE.x; P.ry=MOUSE.y; P.down=MOUSE.down; P.active=true;
+  } else {
+    P.down=false; P.active=false;
+  }
+
+  // Hand-over between input devices: teleport instead of sliding across the screen
+  if (P.mode !== P.lastMode){
+    P.x = P.rx; P.y = P.ry;
+    P.prevDown = P.down;                 // no phantom press on the switch frame
+    if (P.down) P.needRelease = true;    // entered mid-pinch → open the hand once
+    P.lastMode = P.mode;
+  }
+
+  // frame-rate independent smoothing (a 15 fps warm-up no longer lags the cursor)
+  const rate = P.mode==='hand' ? 20 : 34;              // higher = snappier
+  const k = 1 - Math.exp(-rate * dt/1000);
+  P.x += (P.rx-P.x)*k; P.y += (P.ry-P.y)*k;
+
+  P.pressed  = P.down && !P.prevDown;
+  P.released = !P.down && P.prevDown;
+  P.prevDown = P.down;
+
+  if (!P.down) P.needRelease = false;                  // re-arm after opening up
+}
+
+/* Grab intent: true while the hand/mouse is closed and armed — NOT only on the
+   rising edge, so "pinch first, then move onto the target" also works.        */
+function wantsGrab(){ return P.down && !P.needRelease; }
+
+canvas.addEventListener('mousemove', e=>{
+  // only a real movement counts as "the user is driving with the mouse"
+  if (Math.hypot(e.clientX-MOUSE.x, e.clientY-MOUSE.y) > 2 || MOUSE.down) MOUSE.lastMove=performance.now();
+  MOUSE.x=e.clientX; MOUSE.y=e.clientY;
+});
+canvas.addEventListener('mousedown', e=>{ MOUSE.x=e.clientX; MOUSE.y=e.clientY; MOUSE.down=true;  MOUSE.lastMove=performance.now(); });
+window.addEventListener('mouseup',   ()=>{ if (MOUSE.down) MOUSE.lastMove=performance.now(); MOUSE.down=false; });
+canvas.addEventListener('touchstart',e=>{ const t=e.touches[0]; MOUSE.x=t.clientX; MOUSE.y=t.clientY; MOUSE.down=true; MOUSE.lastMove=performance.now(); e.preventDefault(); },{passive:false});
+canvas.addEventListener('touchmove', e=>{ const t=e.touches[0]; MOUSE.x=t.clientX; MOUSE.y=t.clientY; MOUSE.lastMove=performance.now(); e.preventDefault(); },{passive:false});
+window.addEventListener('touchend',  ()=>{ MOUSE.down=false; MOUSE.lastMove=performance.now(); });
+
+/* =========================================================================
+   5. UPDATE
+   ========================================================================= */
+// kept in the vertical middle band: the bottom of the canvas maps to the very
+// edge of the camera frame, where MediaPipe tracking is least reliable
+const TUT_BTN = ()=>({ w:330*G.s, h:92*G.s, x:G.W/2, y:Math.min(G.H*0.68, G.H-130*G.s) });
+
+/* nearest card whose (generously padded) box contains the cursor */
+function cardAt(x,y){
+  const padX = G.cardW*0.62, padY = G.cardH*0.62;      // ~25% larger than the art
+  let best=null, bd=Infinity;
+  for (const c of G.cards){
+    const dx=Math.abs(x-c.x), dy=Math.abs(y-c.y);
+    if (dx<padX && dy<padY){ const d=Math.hypot(dx,dy); if (d<bd){ bd=d; best=c; } }
+  }
+  return best;
+}
+
+function update(now, dt){
+  updatePointer(now, dt);
+  G.fps += ((1000/Math.max(1,dt)) - G.fps)*0.05;
+
+  if (G.screen==='tutorial'){
+    const b = TUT_BTN();
+    const over = Math.abs(P.x-b.x)<b.w*0.68 && Math.abs(P.y-b.y)<b.h*0.85;   // padded box
+    G.hover = over ? 'btn' : null;
+    if (over && wantsGrab()){
+      G.screen='play'; G.level=0; G.score=0; G.solved=0;
+      buildPlaylist(); buildLevel(0);
+      topBar.classList.remove('hidden');
+      P.needRelease = true;              // don't let this same pinch grab a card
+    }
+  }
+
+  if (G.screen==='play' || G.screen==='win'){
+    const locked = G.screen==='win' || now < G.lockedUntil;
+
+    // hover detection
+    G.hover = null;
+    if (!G.held && !locked) G.hover = cardAt(P.x, P.y);
+
+    // pick
+    if (!locked && wantsGrab() && !G.held && G.hover){
+      G.held = G.hover;
+      G.grabOff.x = G.held.x-P.x; G.grabOff.y = G.held.y-P.y;
+      G.cards.splice(G.cards.indexOf(G.held),1); G.cards.push(G.held);   // draw on top
+      G.held.pop = 1;
+    }
+    // drag
+    if (G.held){
+      G.held.tx = P.x + G.grabOff.x*0.5;
+      G.held.ty = P.y + G.grabOff.y*0.5;
+      if (G.held.slot!==null){ G.held.slot=null; syncTargets(); }
+    }
+    // drop
+    if (P.released && G.held){
+      const c = G.held; G.held=null;
+      let best=null, bd=1e9;
+      G.slots.forEach(s=>{ const d=Math.hypot(c.x-s.x,c.y-s.y); if(d<bd){bd=d;best=s;} });
+      place(c, (best && bd < G.cardW*0.85) ? best.i : null);
+      checkAnswer();
+    }
+
+    // physics
+    G.cards.forEach(c=>{
+      const k = 1 - Math.exp(-((c===G.held) ? 34 : 16) * dt/1000);
+      const px = c.x;
+      c.x += (c.tx-c.x)*k; c.y += (c.ty-c.y)*k;
+      const vx = c.x-px;
+      c.tilt += ((-vx*0.012) - c.tilt)*0.15;
+      const wantLift = (c===G.held) ? 1 : (c===G.hover ? 0.45 : 0);
+      c.lift += (wantLift-c.lift)*0.2;
+      c.pop  *= 0.88;
+      c.wrong *= 0.97;
+    });
+    G.slots.forEach(s=> s.flash*=0.94 );
+  }
+
+  // particles
+  G.particles = G.particles.filter(p=>{
+    p.x+=p.vx; p.y+=p.vy; p.vy+=0.22; p.vx*=0.99; p.life-=dt*0.0007; return p.life>0 && p.y<G.H+60;
+  });
+}
+
+/* =========================================================================
+   6. DRAW  (independent rAF loop)
+   ========================================================================= */
+function rr(x,y,w,h,r){
+  ctx.beginPath();
+  ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r);
+  ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath();
+}
+function glassPanel(x,y,w,h,r,alpha=1){
+  ctx.save(); ctx.globalAlpha=alpha;
+  ctx.shadowColor='rgba(0,0,0,.45)'; ctx.shadowBlur=30*G.s; ctx.shadowOffsetY=10*G.s;
+  const g=ctx.createLinearGradient(x,y,x,y+h);
+  g.addColorStop(0,'rgba(255,255,255,.17)'); g.addColorStop(1,'rgba(255,255,255,.06)');
+  ctx.fillStyle=g; rr(x,y,w,h,r); ctx.fill();
+  ctx.shadowColor='transparent';
+  ctx.strokeStyle='rgba(255,255,255,.38)'; ctx.lineWidth=1.4; ctx.stroke();
+  ctx.restore();
+}
+function text(str,x,y,size,weight='600',color='#fff',align='center'){
+  ctx.fillStyle=color; ctx.textAlign=align; ctx.textBaseline='middle';
+  ctx.font=`${weight} ${size}px "Noto Sans Thai","Sarabun","Segoe UI Emoji","Apple Color Emoji",sans-serif`;
+  ctx.fillText(str,x,y);
+}
+/* same, but shrinks the size until the string fits maxW — long Thai compounds
+   like หนังสือพิมพ์ or นักเรียนตั้งใจทำการบ้านทุกวัน would otherwise overflow */
+function textFit(str,x,y,size,maxW,weight='600',color='#fff',align='center'){
+  ctx.font=`${weight} ${size}px "Noto Sans Thai","Sarabun","Segoe UI Emoji","Apple Color Emoji",sans-serif`;
+  const w = ctx.measureText(str).width;
+  text(str, x, y, w>maxW ? size*maxW/w : size, weight, color, align);
+}
+
+function drawScrim(){
+  const g=ctx.createLinearGradient(0,0,0,G.H);
+  g.addColorStop(0,'rgba(6,10,26,.62)'); g.addColorStop(.45,'rgba(6,10,26,.30)'); g.addColorStop(1,'rgba(6,10,26,.68)');
+  ctx.fillStyle=g; ctx.fillRect(0,0,G.W,G.H);
+}
+
+const CONNS=[[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],
+             [9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
+
+function drawHand(){
+  if (P.mode!=='hand' || !HAND.landmarks) return;
+  const pts = HAND.landmarks.map(l=>mapPoint(l.x,l.y));
+  ctx.save();
+  ctx.lineCap='round';
+  ctx.strokeStyle = HAND.grabbing ? 'rgba(52,211,153,.85)' : 'rgba(255,255,255,.55)';
+  ctx.lineWidth = 4*G.s; ctx.shadowColor=ctx.strokeStyle; ctx.shadowBlur=10;
+  CONNS.forEach(([a,b])=>{ ctx.beginPath(); ctx.moveTo(pts[a].x,pts[a].y); ctx.lineTo(pts[b].x,pts[b].y); ctx.stroke(); });
+  ctx.shadowBlur=0;
+  pts.forEach((p,i)=>{
+    ctx.beginPath(); ctx.arc(p.x,p.y,(i===8||i===4?6:4)*G.s,0,7);
+    ctx.fillStyle = (i===8) ? '#38bdf8' : (i===4 ? '#f472b6' : 'rgba(255,255,255,.9)');
+    ctx.fill();
+  });
+  ctx.restore();
+}
+
+function drawCursor(now){
+  if (!P.active) return;
+  const holding = !!G.held;
+  const hovering= !!G.hover && !holding;
+  const missed  = P.down && !holding;
+
+  let color = '#38bdf8', r = 17*G.s, dashed=false;
+  if (hovering){ color='#facc15'; r=27*G.s; dashed=true; }
+  if (missed)  { color='#ef4444'; r=20*G.s; }
+  if (holding) { color='#22c55e'; r=24*G.s; }
+
+  ctx.save();
+  ctx.translate(P.x,P.y);
+  if (dashed){ ctx.rotate((now/900)%(Math.PI*2)); ctx.setLineDash([9*G.s,7*G.s]); }
+  ctx.beginPath(); ctx.arc(0,0,r,0,7);
+  ctx.fillStyle = color+'33'; ctx.fill();
+  ctx.strokeStyle=color; ctx.lineWidth=3.5*G.s; ctx.shadowColor=color; ctx.shadowBlur=16; ctx.stroke();
+  ctx.setLineDash([]);
+  if (holding){ const p=1+Math.sin(now/140)*0.12; ctx.beginPath(); ctx.arc(0,0,r*1.5*p,0,7); ctx.globalAlpha=.35; ctx.stroke(); ctx.globalAlpha=1; }
+  ctx.shadowBlur=0;
+  ctx.beginPath(); ctx.arc(0,0,3.2*G.s,0,7); ctx.fillStyle=color; ctx.fill();
+  ctx.restore();
+}
+
+function drawSlots(){
+  G.slots.forEach((s,i)=>{
+    const w=G.cardW, h=G.cardH, x=s.x-w/2, y=s.y-h/2;
+    const near = G.held && Math.hypot(G.held.x-s.x, G.held.y-s.y) < G.cardW*0.85;
+    ctx.save();
+    ctx.setLineDash([11*G.s,8*G.s]);
+    ctx.lineWidth = near?3.5*G.s:2*G.s;
+    ctx.strokeStyle = s.flash>0.05 ? `rgba(239,68,68,${0.35+s.flash*0.6})`
+                    : near ? 'rgba(250,204,21,.95)' : 'rgba(255,255,255,.45)';
+    ctx.fillStyle = near ? 'rgba(250,204,21,.14)' : 'rgba(255,255,255,.05)';
+    rr(x,y,w,h,20*G.s); ctx.fill(); ctx.stroke();
+    ctx.setLineDash([]);
+    if (!cardInSlot(i)) text(String(i+1), s.x, s.y, 30*G.s, '700', 'rgba(255,255,255,.30)');
+    ctx.restore();
+  });
+}
+
+function drawCard(c, now){
+  const sc = 1 + c.lift*0.10 + c.pop*0.08;
+  const w=G.cardW*sc, h=G.cardH*sc;
+  ctx.save();
+  ctx.translate(c.x, c.y + (-10*G.s*c.lift));
+  ctx.rotate(c.rot*(1-c.lift*0.8) + c.tilt);
+
+  // 2.5D drop shadow (offset grows with lift)
+  ctx.shadowColor='rgba(0,0,0,'+(0.35+0.25*c.lift)+')';
+  ctx.shadowBlur=(22+30*c.lift)*G.s; ctx.shadowOffsetY=(10+18*c.lift)*G.s;
+
+  const g=ctx.createLinearGradient(-w/2,-h/2,w/2,h/2);
+  if (c.wrong>0.05){ g.addColorStop(0,'rgba(248,113,113,.42)'); g.addColorStop(1,'rgba(239,68,68,.22)'); }
+  else { g.addColorStop(0,'rgba(255,255,255,.30)'); g.addColorStop(.55,'rgba(255,255,255,.14)'); g.addColorStop(1,'rgba(160,190,255,.12)'); }
+  ctx.fillStyle=g; rr(-w/2,-h/2,w,h,20*G.s); ctx.fill();
+  ctx.shadowColor='transparent'; ctx.shadowOffsetY=0;
+
+  ctx.strokeStyle = c===G.held ? 'rgba(34,197,94,.95)' : (c===G.hover ? 'rgba(250,204,21,.9)' : 'rgba(255,255,255,.55)');
+  ctx.lineWidth=(c===G.held||c===G.hover)?3*G.s:1.6*G.s;
+  rr(-w/2,-h/2,w,h,20*G.s); ctx.stroke();
+
+  // top gloss
+  ctx.save(); rr(-w/2,-h/2,w,h,20*G.s); ctx.clip();
+  const gl=ctx.createLinearGradient(0,-h/2,0,-h/2+h*0.45);
+  gl.addColorStop(0,'rgba(255,255,255,.30)'); gl.addColorStop(1,'rgba(255,255,255,0)');
+  ctx.fillStyle=gl; ctx.fillRect(-w/2,-h/2,w,h*0.45); ctx.restore();
+
+  text(c.emoji, 0, -h*0.13, h*0.40, '400', '#fff');
+  textFit(c.th, 0,  h*0.26, h*0.20,  w*0.86, '700', '#ffffff');
+  textFit(c.en, 0,  h*0.40, h*0.095, w*0.90, '600', 'rgba(255,255,255,.6)');
+  ctx.restore();
+}
+
+function drawHUD(now){
+  const lv = G.playlist[Math.min(G.level, G.playlist.length-1)];
+  if (!lv) return;
+  const st = STAGES[lv.stage];
+
+  const pw = Math.min(G.W-40, 660*G.s), ph = 94*G.s, px=(G.W-pw)/2, py=16*G.s;
+  glassPanel(px,py,pw,ph,20*G.s);
+  text(`ด่าน ${lv.stage+1}/${STAGES.length} · ${st.label} · ข้อ ${lv.q+1}/${st.questions}`,
+       G.W/2, py+ph*0.30, 14.5*G.s, '600', 'rgba(255,255,255,.72)');
+
+  // the question is the Thai sentence, written the way Thai really is: no spaces
+  const showing = now < G.hintUntil;
+  textFit(showing ? `“${lv.en}”` : lv.th,
+          G.W/2, py+ph*0.68, showing ? 24*G.s : 30*G.s, pw-46*G.s,
+          '700', showing ? '#fcd34d' : '#fff');
+
+  // progress pips for the current stage
+  const r=5*G.s, gapP=17*G.s, x0=G.W/2-(st.questions-1)*gapP/2, yP=py+ph+14*G.s;
+  for (let i=0;i<st.questions;i++){
+    ctx.beginPath(); ctx.arc(x0+i*gapP, yP, i===lv.q ? r*1.4 : r, 0, 7);
+    ctx.fillStyle = i<lv.q ? '#4ade80' : (i===lv.q ? '#fcd34d' : 'rgba(255,255,255,.26)');
+    ctx.fill();
+  }
+
+  // score chip
+  const sw=150*G.s, sh=52*G.s;
+  glassPanel(22*G.s, py, sw, sh, 16*G.s);
+  text(`คะแนน · ${G.solved}/${TOTAL_ROUNDS} ข้อ`, 22*G.s+sw/2, py+sh*0.32, 11.5*G.s, '600', 'rgba(255,255,255,.65)');
+  text(String(G.score), 22*G.s+sw/2, py+sh*0.68, 22*G.s, '700', '#fcd34d');
+}
+
+function drawTutorial(now){
+  const pw=Math.min(G.W-40, 680*G.s), ph=430*G.s, px=(G.W-pw)/2, py=G.H*0.10;
+  glassPanel(px,py,pw,ph,26*G.s);
+  text('วิธีเล่น · How to play', G.W/2, py+46*G.s, 28*G.s, '700');
+  const rows=[
+    ['🤏','จีบนิ้ว (โป้งแตะชี้)','หยิบการ์ด'],
+    ['✊','กำมือ','หยิบการ์ด'],
+    ['🖐️','แบมือ','ปล่อยการ์ดลงช่อง'],
+    ['🖱️','เมาส์ / นิ้วสัมผัส','กดค้างแล้วลากได้เช่นกัน']
+  ];
+  rows.forEach((r,i)=>{
+    const y = py+110*G.s + i*62*G.s;
+    text(r[0], px+58*G.s, y, 34*G.s, '400','#fff','center');
+    text(r[1], px+100*G.s, y-11*G.s, 19*G.s, '700','#fff','left');
+    text(r[2], px+100*G.s, y+13*G.s, 15*G.s, '600','rgba(255,255,255,.65)','left');
+  });
+  // ---- live pinch meter: shows exactly when the grab threshold is crossed ----
+  const mw=Math.min(pw-90*G.s, 380*G.s), mh=14*G.s, mx=G.W/2-mw/2, my=py+ph-62*G.s;
+  const open = Math.max(0, Math.min(1, (HAND.pinchRatio-0.35)/1.05));   // 1 = wide open
+  const closed = 1-open;
+  ctx.fillStyle='rgba(255,255,255,.14)'; rr(mx,my,mw,mh,mh/2); ctx.fill();
+  ctx.fillStyle = HAND.grabbing ? '#34d399' : '#38bdf8';
+  rr(mx,my,Math.max(mh, mw*closed),mh,mh/2); ctx.fill();
+  const thx = mx + mw*(1-0.62);                                          // 0.62 = grab line
+  ctx.strokeStyle='rgba(255,255,255,.85)'; ctx.lineWidth=2*G.s;
+  ctx.beginPath(); ctx.moveTo(thx,my-5*G.s); ctx.lineTo(thx,my+mh+5*G.s); ctx.stroke();
+  text(P.mode==='hand' ? (HAND.grabbing ? 'จับได้แล้ว! ✅' : 'จีบนิ้วให้เลยเส้นขาว')
+                       : (G.aiState==='loading' ? 'กำลังโหลดโมเดล AI…'
+                       :  G.aiState==='unavailable' ? 'ไม่พบกล้อง — ใช้เมาส์คลิกปุ่มได้เลย'
+                       :  'ยกมือขึ้นให้กล้องเห็น'),
+       G.W/2, py+ph-30*G.s, 14*G.s, '600',
+       HAND.grabbing ? '#4ade80' : 'rgba(255,255,255,.65)');
+
+  if (!G.bankLoaded)
+    text('⚠️ ไม่พบ thai_sentences.js — ใช้ประโยคตัวอย่าง 6 ประโยค',
+         G.W/2, py+ph+24*G.s, 13*G.s, '600', '#fca5a5');
+
+  // green floating button (pinch / fist / click)
+  const b=TUT_BTN(), on = G.hover==='btn';
+  ctx.save();
+  ctx.translate(b.x,b.y); ctx.scale(on?1.05:1, on?1.05:1);
+  ctx.shadowColor='rgba(16,185,129,.6)'; ctx.shadowBlur=(30+ (on?26:0))*G.s; ctx.shadowOffsetY=10*G.s;
+  const g=ctx.createLinearGradient(0,-b.h/2,0,b.h/2);
+  g.addColorStop(0,'#34d399'); g.addColorStop(1,'#059669');
+  ctx.fillStyle=g; rr(-b.w/2,-b.h/2,b.w,b.h,b.h/2); ctx.fill();
+  ctx.shadowColor='transparent';
+  ctx.strokeStyle='rgba(255,255,255,.75)'; ctx.lineWidth=2*G.s; ctx.stroke();
+  text('เริ่มเล่น! 🤏', 0, -3*G.s, 26*G.s, '700', '#04231a');
+  text('pinch · fist · click', 0, 20*G.s, 12*G.s, '600', 'rgba(4,35,26,.65)');
+  ctx.restore();
+}
+
+function drawBanner(now){
+  if (!G.banner) return;
+  const t=(now-G.banner.t)/1000, a=Math.min(1,t*3)*(t>1.7?Math.max(0,(2.1-t)/0.4):1);
+  ctx.save(); ctx.globalAlpha=a;
+  const pw=Math.min(G.W-60, 520*G.s), ph=150*G.s, px=(G.W-pw)/2;
+  const py=Math.min(G.H-ph-90*G.s, G.H*0.5 + G.cardH*0.62 + 16*G.s);  // just below the slots
+  glassPanel(px,py,pw,ph,26*G.s);
+  const pop = 1+Math.sin(Math.min(t,0.5)*Math.PI)*0.12;
+  ctx.save(); ctx.translate(G.W/2, py+ph*0.40); ctx.scale(pop,pop);
+  text(G.banner.text, 0,0, 46*G.s, '700', '#4ade80'); ctx.restore();
+  text(G.banner.sub, G.W/2, py+ph*0.76, 22*G.s, '600', '#fff');
+  ctx.restore();
+}
+
+function drawStatus(now){
+  const searching = P.mode==='none';
+  if (!searching) return;
+  const pw=Math.min(G.W-60, 380*G.s), ph=54*G.s, px=(G.W-pw)/2, py=G.H-ph-22*G.s;
+  ctx.save(); ctx.globalAlpha=0.55+Math.sin(now/420)*0.25;
+  glassPanel(px,py,pw,ph,16*G.s);
+  text('👋  กำลังมองหามือของคุณ... / Looking for your hand...', G.W/2, py+ph/2, 14.5*G.s, '600', '#fde68a');
+  ctx.restore();
+}
+
+function drawParticles(){
+  G.particles.forEach(p=>{
+    ctx.globalAlpha=Math.max(0,p.life); ctx.fillStyle=p.c;
+    ctx.fillRect(p.x-p.size/2, p.y-p.size/2, p.size, p.size*1.6);
+  });
+  ctx.globalAlpha=1;
+}
+
+/* ---------------------------- MAIN LOOP ---------------------------- */
+let last = performance.now();
+function loop(now){
+  const dt = Math.min(64, now-last); last = now;
+  update(now, dt);
+
+  ctx.clearRect(0,0,G.W,G.H);
+  if (G.screen!=='start'){
+    drawScrim();
+    drawHand();
+    if (G.screen==='tutorial') drawTutorial(now);
+    if (G.screen==='play' || G.screen==='win'){
+      drawHUD(now);
+      drawSlots();
+      G.cards.forEach(c=>drawCard(c,now));
+      drawParticles();
+      drawBanner(now);
+    }
+    drawStatus(now);
+    drawCursor(now);
+  }
+  requestAnimationFrame(loop);
+}
+
+/* =========================================================================
+   7. SCREEN WIRING
+   ========================================================================= */
+document.getElementById('btnStart').addEventListener('click', async ()=>{
+  startScreen.classList.add('hidden');
+  G.screen   = 'tutorial';
+  G.aiState  = 'loading';
+  MOUSE.lastMove = -9999;                 // this click must not claim mouse control
+  MOUSE.down = false;
+  try{ await initHands(); }
+  catch(err){
+    console.warn('Camera/AI unavailable → mouse fallback', err);
+    G.aiState = 'unavailable';
+  }
+});
+document.getElementById('btnAgain').addEventListener('click', ()=>{
+  endScreen.classList.add('hidden');
+  G.level=0; G.score=0; G.solved=0; G.screen='play';
+  buildPlaylist(); buildLevel(0);                 // new random 15 questions
+  topBar.classList.remove('hidden');
+});
+document.getElementById('btnReset').addEventListener('click', ()=>{
+  if (G.screen==='play') buildLevel(G.level);     // replay the current question
+});
+document.getElementById('btnHint').addEventListener('click', ()=>{ G.hintUntil = performance.now()+2500; });
+window.addEventListener('keydown', e=>{ if (e.key==='h'||e.key==='H') G.hintUntil = performance.now()+2500; });
+
+function showEnd(){
+  document.getElementById('finalScore').textContent = G.score;
+  document.getElementById('finalCount').textContent = G.solved;
+  endScreen.classList.remove('hidden');
+  topBar.classList.add('hidden');
+}
+
+/* ---------------------------- BOOT ---------------------------- */
+buildPlaylist();   // so the tutorial can report whether the bank loaded
+resize();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
