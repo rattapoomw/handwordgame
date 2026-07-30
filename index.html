@@ -500,9 +500,34 @@ window.addEventListener('touchend',  ()=>{ MOUSE.down=false; MOUSE.lastMove=perf
 /* =========================================================================
    5. UPDATE
    ========================================================================= */
-// kept in the vertical middle band: the bottom of the canvas maps to the very
-// edge of the camera frame, where MediaPipe tracking is least reliable
-const TUT_BTN = ()=>({ w:330*G.s, h:92*G.s, x:G.W/2, y:Math.min(G.H*0.75, G.H-150*G.s) });
+/* One layout for the whole tutorial screen: the panel and the button are
+   stacked with a guaranteed gap, then the stack is centred in the space
+   between the top margin and the status bar. On short windows everything
+   scales down together (ts) instead of the button sliding under the panel. */
+function tutLayout(){
+  const top   = 20*G.s;
+  const bottom= G.H - 96*G.s;                       // clear the bottom status bar
+  const avail = Math.max(180, bottom - top);
+
+  const PANEL=430, GAP=26, BTN=92;                  // design units at scale 1
+  const warnU = G.bankLoaded ? 0 : 26;
+  const needU = PANEL + GAP + BTN + warnU;
+  const ts    = Math.max(0.40, Math.min(G.s, avail/needU));
+
+  const ph = PANEL*ts, bh = BTN*ts, warn = warnU*ts;
+  const pw = Math.min(G.W-40, 680*ts);
+  const bw = Math.min(G.W-60, 330*ts);
+  const total = ph + warn + GAP*ts + bh;
+  const y0 = top + Math.max(0, (avail-total)/2);
+
+  return {
+    ts,
+    panel:{ x:(G.W-pw)/2, y:y0, w:pw, h:ph },
+    warnY: y0 + ph + 15*ts,
+    btn  : { x:G.W/2, y:y0 + ph + warn + GAP*ts + bh/2, w:bw, h:bh }
+  };
+}
+const TUT_BTN = ()=> tutLayout().btn;
 
 /* nearest card whose (generously padded) box contains the cursor */
 function cardAt(x,y){
@@ -744,54 +769,56 @@ function drawHUD(now){
 }
 
 function drawTutorial(now){
-  const pw=Math.min(G.W-40, 680*G.s), ph=430*G.s, px=(G.W-pw)/2, py=G.H*0.10;
-  glassPanel(px,py,pw,ph,26*G.s);
-  text('วิธีเล่น · How to play', G.W/2, py+46*G.s, 28*G.s, '700');
+  const L = tutLayout(), ts = L.ts;
+  const px=L.panel.x, py=L.panel.y, pw=L.panel.w, ph=L.panel.h;
+  glassPanel(px,py,pw,ph,26*ts);
+  text('วิธีเล่น · How to play', G.W/2, py+46*ts, 28*ts, '700');
+
   const rows=[
-    ['🤏','จีบนิ้ว (โป้งแตะชี้)','หยิบการ์ด'],
-    ['✊','กำมือ','หยิบการ์ด'],
-    ['🖐️','แบมือ','ปล่อยการ์ดลงช่อง'],
-    ['🖱️','เมาส์ / นิ้วสัมผัส','กดค้างแล้วลากได้เช่นกัน']
+    ['\u{1F90F}','จีบนิ้ว (โป้งแตะชี้)','หยิบการ์ด'],
+    ['\u270A','กำมือ','หยิบการ์ด'],
+    ['\u{1F590}\uFE0F','แบมือ','ปล่อยการ์ดลงช่อง'],
+    ['\u{1F5B1}\uFE0F','เมาส์ / นิ้วสัมผัส','กดค้างแล้วลากได้เช่นกัน']
   ];
   rows.forEach((r,i)=>{
-    const y = py+110*G.s + i*62*G.s;
-    text(r[0], px+58*G.s, y, 34*G.s, '400','#fff','center');
-    text(r[1], px+100*G.s, y-11*G.s, 19*G.s, '700','#fff','left');
-    text(r[2], px+100*G.s, y+13*G.s, 15*G.s, '600','rgba(255,255,255,.65)','left');
+    const y = py+110*ts + i*62*ts;
+    text(r[0], px+58*ts, y, 34*ts, '400','#fff','center');
+    textFit(r[1], px+100*ts, y-11*ts, 19*ts, pw-130*ts, '700','#fff','left');
+    textFit(r[2], px+100*ts, y+13*ts, 15*ts, pw-130*ts, '600','rgba(255,255,255,.65)','left');
   });
+
   // ---- live pinch meter: shows exactly when the grab threshold is crossed ----
-  const mw=Math.min(pw-90*G.s, 380*G.s), mh=14*G.s, mx=G.W/2-mw/2, my=py+ph-62*G.s;
+  const mw=Math.min(pw-90*ts, 380*ts), mh=14*ts, mx=G.W/2-mw/2, my=py+ph-62*ts;
   const open = Math.max(0, Math.min(1, (HAND.pinchRatio-0.35)/1.05));   // 1 = wide open
-  const closed = 1-open;
   ctx.fillStyle='rgba(255,255,255,.14)'; rr(mx,my,mw,mh,mh/2); ctx.fill();
   ctx.fillStyle = HAND.grabbing ? '#34d399' : '#38bdf8';
-  rr(mx,my,Math.max(mh, mw*closed),mh,mh/2); ctx.fill();
+  rr(mx,my,Math.max(mh, mw*(1-open)),mh,mh/2); ctx.fill();
   const thx = mx + mw*(1-0.62);                                          // 0.62 = grab line
-  ctx.strokeStyle='rgba(255,255,255,.85)'; ctx.lineWidth=2*G.s;
-  ctx.beginPath(); ctx.moveTo(thx,my-5*G.s); ctx.lineTo(thx,my+mh+5*G.s); ctx.stroke();
-  text(P.mode==='hand' ? (HAND.grabbing ? 'จับได้แล้ว! ✅' : 'จีบนิ้วให้เลยเส้นขาว')
+  ctx.strokeStyle='rgba(255,255,255,.85)'; ctx.lineWidth=2*ts;
+  ctx.beginPath(); ctx.moveTo(thx,my-5*ts); ctx.lineTo(thx,my+mh+5*ts); ctx.stroke();
+  text(P.mode==='hand' ? (HAND.grabbing ? 'จับได้แล้ว! \u2705' : 'จีบนิ้วให้เลยเส้นขาว')
                        : (G.aiState==='loading' ? 'กำลังโหลดโมเดล AI…'
                        :  G.aiState==='unavailable' ? 'ไม่พบกล้อง — ใช้เมาส์คลิกปุ่มได้เลย'
                        :  'ยกมือขึ้นให้กล้องเห็น'),
-       G.W/2, py+ph-30*G.s, 14*G.s, '600',
+       G.W/2, py+ph-30*ts, 14*ts, '600',
        HAND.grabbing ? '#4ade80' : 'rgba(255,255,255,.65)');
 
   if (!G.bankLoaded)
-    text('⚠️ ไม่พบ thai_sentences.js — ใช้ประโยคตัวอย่าง 6 ประโยค',
-         G.W/2, py+ph+24*G.s, 13*G.s, '600', '#fca5a5');
+    textFit('\u26A0\uFE0F ไม่พบ thai_sentences.js — ใช้ประโยคตัวอย่าง 6 ประโยค',
+            G.W/2, L.warnY, 13*ts, G.W-60, '600', '#fca5a5');
 
-  // green floating button (pinch / fist / click)
-  const b=TUT_BTN(), on = G.hover==='btn';
+  // green floating button — always below the panel, never under it
+  const b=L.btn, on = G.hover==='btn';
   ctx.save();
   ctx.translate(b.x,b.y); ctx.scale(on?1.05:1, on?1.05:1);
-  ctx.shadowColor='rgba(16,185,129,.6)'; ctx.shadowBlur=(30+ (on?26:0))*G.s; ctx.shadowOffsetY=10*G.s;
+  ctx.shadowColor='rgba(16,185,129,.6)'; ctx.shadowBlur=(30+(on?26:0))*ts; ctx.shadowOffsetY=10*ts;
   const g=ctx.createLinearGradient(0,-b.h/2,0,b.h/2);
   g.addColorStop(0,'#34d399'); g.addColorStop(1,'#059669');
   ctx.fillStyle=g; rr(-b.w/2,-b.h/2,b.w,b.h,b.h/2); ctx.fill();
   ctx.shadowColor='transparent';
-  ctx.strokeStyle='rgba(255,255,255,.75)'; ctx.lineWidth=2*G.s; ctx.stroke();
-  text('เริ่มเล่น! 🤏', 0, -3*G.s, 26*G.s, '700', '#04231a');
-  text('pinch · fist · click', 0, 20*G.s, 12*G.s, '600', 'rgba(4,35,26,.65)');
+  ctx.strokeStyle='rgba(255,255,255,.75)'; ctx.lineWidth=2*ts; ctx.stroke();
+  text('เริ่มเล่น! \u{1F90F}', 0, -3*ts, 26*ts, '700', '#04231a');
+  text('pinch · fist · click', 0, 20*ts, 12*ts, '600', 'rgba(4,35,26,.65)');
   ctx.restore();
 }
 
