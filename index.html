@@ -424,7 +424,7 @@ function scatterCards(){
   const vr = videoRect();
   const minX = Math.max(34*G.s,        vr.x + 10*G.s) + hw;
   const maxX = Math.min(G.W - 34*G.s,  vr.x + vr.w - 10*G.s) - hw;
-  const minY = Math.max(138*G.s,       vr.y + 10*G.s) + hh;
+  const minY = Math.max(hudBottom(),   vr.y + 10*G.s) + hh;
   const maxY = Math.min(G.H - 96*G.s,  vr.y + vr.h - 10*G.s) - hh;
 
   // keep-out band around the slot row
@@ -874,35 +874,57 @@ function drawCard(c, now){
   ctx.restore();
 }
 
+/* HUD geometry — one source of truth, because scatterCards() must know where
+   the panel ends so cards never land underneath it.                        */
+function hudGeom(){
+  const wide = G.W >= 760;                       // room for a separate score chip?
+  const py = 16*G.s, ph = 124*G.s;
+  const chip = wide ? { w:196*G.s, h:78*G.s, x:22*G.s, y:py } : null;
+  // centred panel must not collide with the left-hand chip
+  const cap = chip ? G.W - 2*(chip.x + chip.w + 14*G.s) : G.W - 32*G.s;
+  const pw = Math.max(240*G.s, Math.min(cap, 760*G.s));
+  return { wide, chip, py, ph, pw, px:(G.W-pw)/2, pipY: py+ph+16*G.s };
+}
+const hudBottom = ()=> hudGeom().pipY + 20*G.s;
+
 function drawHUD(now){
   const lv = G.playlist[Math.min(G.level, G.playlist.length-1)];
   if (!lv) return;
   const st = STAGES[lv.stage];
+  const L = hudGeom(), px=L.px, py=L.py, pw=L.pw, ph=L.ph;
 
-  const pw = Math.min(G.W-40, 660*G.s), ph = 94*G.s, px=(G.W-pw)/2, py=16*G.s;
-  glassPanel(px,py,pw,ph,20*G.s);
-  text(`ด่าน ${lv.stage+1}/${STAGES.length} · ${st.label} · ข้อ ${lv.q+1}/${st.questions}`,
-       G.W/2, py+ph*0.30, 14.5*G.s, '600', 'rgba(255,255,255,.72)');
+  glassPanel(px,py,pw,ph,22*G.s);
+  const head = `ด่าน ${lv.stage+1}/${STAGES.length} · ${st.label} · ข้อ ${lv.q+1}/${st.questions}`;
+  if (L.wide){
+    text(head, G.W/2, py+ph*0.23, 15*G.s, '600', 'rgba(255,255,255,.72)');
+  } else {
+    // no room for a chip: stage info left, score right, both inside the panel
+    text(head, px+18*G.s, py+ph*0.21, 14*G.s, '600', 'rgba(255,255,255,.72)', 'left');
+    text(String(G.score), px+pw-18*G.s, py+ph*0.21, 26*G.s, '700', '#fcd34d', 'right');
+  }
 
-  // the question is the Thai sentence, written the way Thai really is: no spaces
+  // the question itself — the thing the player is actually reading
   const showing = now < G.hintUntil;
   textFit(showing ? `“${lv.en}”` : lv.th,
-          G.W/2, py+ph*0.68, showing ? 24*G.s : 30*G.s, pw-46*G.s,
+          G.W/2, py+ph*0.63, showing ? 34*G.s : 46*G.s, pw-44*G.s,
           '700', showing ? '#fcd34d' : '#fff');
 
   // progress pips for the current stage
-  const r=5*G.s, gapP=17*G.s, x0=G.W/2-(st.questions-1)*gapP/2, yP=py+ph+14*G.s;
+  const r=5.5*G.s, gapP=18*G.s, x0=G.W/2-(st.questions-1)*gapP/2;
   for (let i=0;i<st.questions;i++){
-    ctx.beginPath(); ctx.arc(x0+i*gapP, yP, i===lv.q ? r*1.4 : r, 0, 7);
+    ctx.beginPath(); ctx.arc(x0+i*gapP, L.pipY, i===lv.q ? r*1.4 : r, 0, 7);
     ctx.fillStyle = i<lv.q ? '#4ade80' : (i===lv.q ? '#fcd34d' : 'rgba(255,255,255,.26)');
     ctx.fill();
   }
 
   // score chip
-  const sw=150*G.s, sh=52*G.s;
-  glassPanel(22*G.s, py, sw, sh, 16*G.s);
-  text(`คะแนน · ${G.solved}/${G.totalRounds} ข้อ`, 22*G.s+sw/2, py+sh*0.32, 11.5*G.s, '600', 'rgba(255,255,255,.65)');
-  text(String(G.score), 22*G.s+sw/2, py+sh*0.68, 22*G.s, '700', '#fcd34d');
+  if (L.chip){
+    const c = L.chip;
+    glassPanel(c.x, c.y, c.w, c.h, 18*G.s);
+    text(`คะแนน · ${G.solved}/${G.totalRounds} ข้อ`,
+         c.x+c.w/2, c.y+c.h*0.27, 13*G.s, '600', 'rgba(255,255,255,.68)');
+    textFit(String(G.score), c.x+c.w/2, c.y+c.h*0.68, 42*G.s, c.w-24*G.s, '700', '#fcd34d');
+  }
 }
 
 function drawTutorial(now){
