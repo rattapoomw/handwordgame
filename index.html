@@ -79,6 +79,25 @@
 </div>
 
 
+<!-- ===== Camera problem banner ===== -->
+<div class="layer">
+  <div id="camBanner" class="hidden absolute top-4 left-1/2 -translate-x-1/2 w-[92%] max-w-xl" style="pointer-events:auto">
+    <div class="glass rounded-2xl px-4 py-3" style="border-color:rgba(252,165,165,.55)">
+      <div class="flex items-start gap-3">
+        <span class="text-xl leading-none">📷</span>
+        <div class="flex-1 min-w-0">
+          <div id="camTitle" class="font-bold text-sm text-rose-200"></div>
+          <div id="camFix" class="text-xs text-white/70 mt-0.5 leading-relaxed"></div>
+        </div>
+      </div>
+      <div class="flex gap-2 mt-3">
+        <button id="camRetry" class="flex-1 rounded-xl bg-emerald-500 hover:bg-emerald-400 transition px-3 py-2 text-sm font-bold">ลองใหม่</button>
+        <button id="camMouse" class="rounded-xl glass hover:bg-white/20 transition px-3 py-2 text-sm font-semibold">เล่นด้วยเมาส์</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- ===== Pinch check skip (canvas screen draws the rest) ===== -->
 <div class="layer">
   <div id="pinchBar" class="hidden absolute bottom-6 left-1/2 -translate-x-1/2" style="pointer-events:auto">
@@ -257,7 +276,8 @@ const G = {
   endHold     : 0,
   particles   : [],
   seed   : 1013,
-  aiState: 'idle',           // idle | loading | ready | unavailable
+  aiState: 'idle',           // idle | loading | ready | unavailable | lost
+  camMsg : null,
   fps    : 60,
   s      : 1, W:0, H:0, cardW:0, cardH:0
 };
@@ -287,23 +307,114 @@ const MOUSE= { x:0, y:0, down:false, lastMove:-9999 };
 /* =========================================================================
    1. CAMERA + MEDIAPIPE
    ========================================================================= */
-let hands = null, camera = null, cameraReady = false;
+let hands = null, camera = null, cameraReady = false, stream = null;
+
+/* Camera failures are common on shared classroom machines and each cause needs
+   a different instruction, so classify rather than showing one generic error.  */
+function cameraProblem(err){
+  const n = (err && err.name) || '';
+  // no getUserMedia at all → almost always a plain http:// page
+  if (!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia))
+    return { code:'insecure', th:'หน้านี้ไม่ได้เปิดผ่าน https',
+             fix:'เบราว์เซอร์อนุญาตให้ใช้กล้องเฉพาะ https หรือ localhost เท่านั้น' };
+  if (n==='NotAllowedError'||n==='SecurityError')
+    return { code:'denied', th:'เบราว์เซอร์ยังไม่อนุญาตให้ใช้กล้อง',
+             fix:'กดไอคอนกล้องบนแถบที่อยู่เว็บ แล้วเลือก "อนุญาต" จากนั้นกดลองใหม่' };
+  if (n==='NotReadableError'||n==='TrackStartError'||n==='AbortError')
+    return { code:'busy', th:'เปิดกล้องไม่ได้ — กล้องอาจถูกโปรแกรมอื่นใช้อยู่',
+             fix:'ปิด Zoom / Teams / Meet หรือแท็บอื่นที่ใช้กล้อง เปิดฝาปิดเลนส์ แล้วกดลองใหม่' };
+  if (n==='NotFoundError'||n==='DevicesNotFoundError')
+    return { code:'none', th:'ไม่พบกล้องในเครื่องนี้',
+             fix:'เสียบกล้องแล้วกดลองใหม่ หรือเล่นด้วยเมาส์ก็ได้' };
+  if (n==='OverconstrainedError'||n==='ConstraintNotSatisfiedError')
+    return { code:'constraint', th:'กล้องไม่รองรับความละเอียดที่ขอ',
+             fix:'ระบบจะลองความละเอียดต่ำลงให้อัตโนมัติ' };
+  if (n==='ScriptError')
+    return { code:'script', th:'โหลดไลบรารี MediaPipe ไม่สำเร็จ',
+             fix:'ตรวจสอบการเชื่อมต่ออินเทอร์เน็ต แล้วรีเฟรชหน้าเว็บ' };
+  return { code:'unknown', th:'เปิดกล้องไม่ได้',
+           fix:'ลองรีเฟรชหน้าเว็บ หรือเล่นด้วยเมาส์แทน' };
+}
+
+/* Release every track. Without this a retry asks the driver for a device the
+   page itself is still holding, which produces NotReadableError again.        */
+function releaseCamera(){
+  try{ camera && camera.stop && camera.stop(); }catch(e){}
+  if (stream){ stream.getTracks().forEach(t=>{ try{ t.stop(); }catch(e){} }); stream = null; }
+  if (video.srcObject) video.srcObject = null;
+  camera = null; cameraReady = false;
+}
+
+/* Ladder of constraints: an exact 1280x720 request is what most often trips a
+   cheap or virtual webcam driver, so fall back rather than giving up.         */
+const CAM_TRIES = [
+  { video:{ width:{ideal:1280}, height:{ideal:720}, facingMode:'user' } },
+  { video:{ width:{ideal:640},  height:{ideal:480}, facingMode:'user' } },
+  { video:true }
+];
+
+async function openStream(){
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+    const e = new Error('getUserMedia unavailable'); e.name = 'NotSupportedError'; throw e;
+  }
+  let last;
+  for (const c of CAM_TRIES){
+    try{ return await navigator.mediaDevices.getUserMedia(c); }
+    catch(err){
+      last = err;
+      if (err && (err.name==='NotAllowedError' || err.name==='SecurityError')) throw err;
+      await new Promise(r=>setTimeout(r, 350));     // let the driver settle
+    }
+  }
+  throw last;
+}
 
 async function initHands(){
-  if (typeof Hands === 'undefined') throw new Error('MediaPipe not loaded');
-  hands = new Hands({ locateFile:(f)=>`https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4/${f}` });
-  hands.setOptions({
-    maxNumHands:1, modelComplexity:1,
-    minDetectionConfidence:0.6, minTrackingConfidence:0.6
-  });
-  hands.onResults(onResults);                    // ← only stores data, never draws
+  if (typeof Hands === 'undefined'){ const e=new Error('MediaPipe not loaded'); e.name='ScriptError'; throw e; }
+  releaseCamera();                                  // never stack two streams
 
-  camera = new Camera(video, {
-    onFrame: async ()=>{ try{ await hands.send({image:video}); }catch(e){} },
-    width:1280, height:720          // 16:9 source ≈ 16:9 window ⇒ almost no crop
+  stream = await openStream();                      // own the stream ourselves
+  video.srcObject = stream;
+  await video.play().catch(()=>{});
+  await new Promise(res=>{                          // wait for real dimensions
+    if (video.videoWidth) return res();
+    video.addEventListener('loadedmetadata', res, { once:true });
+    setTimeout(res, 4000);
   });
-  await camera.start();
+
+  if (!hands){
+    hands = new Hands({ locateFile:(f)=>`https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4/${f}` });
+    hands.setOptions({
+      maxNumHands:1, modelComplexity:1,
+      minDetectionConfidence:0.6, minTrackingConfidence:0.6
+    });
+    hands.onResults(onResults);                     // ← only stores data, never draws
+  }
+
+  // drive inference ourselves; Camera utils would open a second getUserMedia
   cameraReady = true;
+  let busy = false;
+  (function pump(){
+    if (!cameraReady) return;
+    requestAnimationFrame(pump);
+    if (busy || video.readyState < 2) return;
+    busy = true;
+    hands.send({ image:video }).catch(()=>{}).finally(()=>{ busy = false; });
+  })();
+
+  watchCamera();
+  G.aiState = 'ready';
+  G.camMsg = null;
+  resize();
+}
+
+/* the OS can revoke a camera at any time (sleep, unplug, another app grabbing it) */
+function watchCamera(){
+  if (!stream) return;
+  stream.getVideoTracks().forEach(t=>{
+    t.onended = ()=>{ if (G.aiState==='ready'){ G.aiState='lost'; G.camMsg =
+      { th:'กล้องหยุดทำงาน', fix:'อาจถูกโปรแกรมอื่นแย่งใช้ กดลองใหม่ได้' }; } };
+  });
 }
 
 /* onResults: pure data intake. No drawing here. */
@@ -1048,8 +1159,9 @@ function drawTutorial(now){
   ctx.strokeStyle='rgba(255,255,255,.85)'; ctx.lineWidth=2*ts;
   ctx.beginPath(); ctx.moveTo(thx,my-5*ts); ctx.lineTo(thx,my+mh+5*ts); ctx.stroke();
   text(P.mode==='hand' ? (HAND.grabbing ? 'จับได้แล้ว! \u2705' : 'จีบนิ้วให้เลยเส้นขาว')
-                       : (G.aiState==='loading' ? 'กำลังโหลดโมเดล AI…'
-                       :  G.aiState==='unavailable' ? 'ไม่พบกล้อง — ใช้เมาส์คลิกปุ่มได้เลย'
+                       : (G.aiState==='loading' ? 'กำลังเปิดกล้องและโหลดโมเดล…'
+                       :  G.camMsg ? G.camMsg.th
+                       :  G.aiState==='unavailable' ? 'ไม่มีกล้อง — ใช้เมาส์คลิกปุ่มได้เลย'
                        :  'ยกมือขึ้นให้กล้องเห็น'),
        G.W/2, py+ph-30*ts, 14*ts, '600',
        HAND.grabbing ? '#4ade80' : 'rgba(255,255,255,.65)');
@@ -1113,12 +1225,16 @@ function drawEndButton(now){
 function drawStatus(now){
   const searching = P.mode==='none';
   if (!searching) return;
+  const msg = G.camMsg ? ('📷  ' + G.camMsg.th)
+            : G.aiState==='loading' ? '⏳  กำลังเปิดกล้อง…'
+            : G.aiState==='unavailable' ? '🖱  ใช้เมาส์ลากการ์ดได้เลย'
+            : '👋  กำลังมองหามือของคุณ... / Looking for your hand...';
   const playing = (G.screen==='play'||G.screen==='win');
   const pw=Math.min(G.W-60, 380*G.s), ph=54*G.s, px=(G.W-pw)/2;
   const py=G.H-ph-22*G.s - (playing && G.W<760 ? 66*G.s : 0);   // clear จบเกม
   ctx.save(); ctx.globalAlpha=0.55+Math.sin(now/420)*0.25;
   glassPanel(px,py,pw,ph,16*G.s);
-  text('👋  กำลังมองหามือของคุณ... / Looking for your hand...', G.W/2, py+ph/2, 14.5*G.s, '600', '#fde68a');
+  textFit(msg, G.W/2, py+ph/2, 14.5*G.s, pw-28*G.s, '600', G.camMsg ? '#fca5a5' : '#fde68a');
   ctx.restore();
 }
 
@@ -1299,7 +1415,7 @@ STATS.download = function(){
   a.href = url; a.download = `thai_ar_log_${new Date().toISOString().slice(0,10)}.csv`;
   a.click(); setTimeout(()=>URL.revokeObjectURL(url), 1000);
 };
-addEventListener('pagehide', ()=>{ STATS.endSession('closed'); });
+addEventListener('pagehide', ()=>{ STATS.endSession('closed'); releaseCamera(); });
 addEventListener('visibilitychange', ()=>{ if (document.visibilityState==='hidden') STATS.flush(); });
 
 /* =========================================================================
@@ -1452,17 +1568,48 @@ function showScreen(which){
   pinchBar     .classList.toggle('hidden', which!=='pinch');
 }
 
+/* --- camera problem banner --- */
+const camBanner = document.getElementById('camBanner');
+function showCamProblem(info){
+  G.camMsg = info;
+  document.getElementById('camTitle').textContent = info.th;
+  document.getElementById('camFix').textContent   = info.fix;
+  camBanner.classList.remove('hidden');
+}
+function hideCamProblem(){ camBanner.classList.add('hidden'); G.camMsg = null; }
+
+let camBusy = false;
+async function startCamera(){
+  if (camBusy) return;
+  camBusy = true; hideCamProblem(); G.aiState = 'loading';
+  try{
+    await initHands();
+  }catch(err){
+    console.warn('camera', err && err.name, err);
+    G.aiState = 'unavailable';
+    showCamProblem(cameraProblem(err));
+  }finally{ camBusy = false; }
+}
+document.getElementById('camRetry').addEventListener('click', ()=>{
+  releaseCamera(); setTimeout(startCamera, 250);      // let the driver release first
+});
+document.getElementById('camMouse').addEventListener('click', ()=>{
+  hideCamProblem();
+  if (G.screen==='pinch') PC.finish(true);            // nothing to measure without a camera
+});
+/* a camera grabbed by another app is usually free again when we come back */
+document.addEventListener('visibilitychange', ()=>{
+  if (document.visibilityState==='visible' && G.aiState!=='ready' && G.aiState!=='loading'
+      && G.screen!=='start') startCamera();
+});
+
 /* --- start → form (camera boots in the background while they type) --- */
 document.getElementById('btnStart').addEventListener('click', async ()=>{
   showScreen('form');
   refreshNameList();
   document.getElementById('fName').focus();
   MOUSE.lastMove = -9999; MOUSE.down = false;
-  if (!hands){
-    G.aiState = 'loading';
-    try{ await initHands(); }
-    catch(err){ console.warn('Camera/AI unavailable → mouse fallback', err); G.aiState='unavailable'; }
-  }
+  if (G.aiState !== 'ready') startCamera();
 });
 document.getElementById('btnBackStart').addEventListener('click', ()=>showScreen('start'));
 
