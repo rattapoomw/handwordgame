@@ -79,6 +79,15 @@
 </div>
 
 
+<!-- ===== Pinch check skip (canvas screen draws the rest) ===== -->
+<div class="layer">
+  <div id="pinchBar" class="hidden absolute bottom-6 left-1/2 -translate-x-1/2" style="pointer-events:auto">
+    <button id="btnSkipPinch" class="glass rounded-xl px-4 py-2.5 text-sm font-semibold hover:bg-white/20 transition">
+      ข้ามขั้นตอนนี้
+    </button>
+  </div>
+</div>
+
 <!-- ===== Player form (between start and tutorial) ===== -->
 <div id="formScreen" class="layer hidden flex items-center justify-center px-5 overflow-y-auto" style="pointer-events:auto">
   <div class="glass rounded-3xl max-w-lg w-full p-7 my-6 fade-in">
@@ -261,7 +270,18 @@ const P = {                      // unified pointer
   lastMode:'none', needRelease:false
 };
 const HAND = { landmarks:null, lastSeen:0, acquiredAt:0, grabbing:false,
-               pinchRatio:1.4, pinchEMA:1.4, curled:0 };
+               pinchRatio:1.4, pinchEMA:1.4, curled:0, palm:0.8 };
+
+/* rolling aperture trace (~3 s) — the open phase happens BEFORE the grab is
+   detected, so it has to be recorded continuously and read back afterwards */
+const AP = {
+  buf:[], cap:200,
+  push(t,v,palm){ this.buf.push({t,v,palm}); if(this.buf.length>this.cap) this.buf.shift(); },
+  window(from){ return this.buf.filter(s=>s.t>=from); }
+};
+const mean = a => a.length ? a.reduce((x,y)=>x+y,0)/a.length : 0;
+const sd   = a => { if(a.length<2) return 0; const m=mean(a);
+                    return Math.sqrt(mean(a.map(v=>(v-m)*(v-m)))); };
 const MOUSE= { x:0, y:0, down:false, lastMove:-9999 };
 
 /* =========================================================================
@@ -308,6 +328,18 @@ function onResults(res){
 function d3(a,b){ const dx=a.x-b.x, dy=a.y-b.y, dz=(a.z||0)-(b.z||0); return Math.hypot(dx,dy,dz); }
 function d2(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
 
+/* aperture thresholds — logged with every session so a future change to them
+   cannot be mistaken for a change in the patient                          */
+const GRIP_CLOSE = 0.62, GRIP_OPEN = 0.95;
+
+/* Aperture is measured in 2D. If the hand turns edge-on to the camera the
+   thumb–index gap foreshortens and reads falsely small. The span across the
+   MCP knuckles collapses in the same situation, so it works as a validity
+   flag: ~0.75-0.95 when the palm faces the camera, ~0.25 edge-on.        */
+function palmFacing(lm){
+  return d2(lm[5], lm[17]) / Math.max(1e-4, d2(lm[0], lm[9]));
+}
+
 function updateGesture(lm, now){
   const palm = Math.max(1e-4, d2(lm[0], lm[9]));      // scale-invariant reference
   const raw  = d2(lm[4], lm[8]) / palm;               // ~0.3 closed · ~1.6 open
@@ -322,6 +354,8 @@ function updateGesture(lm, now){
     if (tipD < pipD * 1.03) curled++; else extended++;
   }
   HAND.curled = curled;
+  HAND.palm   = palmFacing(lm);
+  AP.push(now, pinch, HAND.palm);
 
   // landmarks are unreliable for ~250 ms after the hand is first found
   if (now - HAND.acquiredAt < 250){ HAND.grabbing = false; return; }
@@ -657,6 +691,8 @@ function cardAt(x,y){
 function update(now, dt){
   updatePointer(now, dt);
   G.fps += ((1000/Math.max(1,dt)) - G.fps)*0.05;
+  MV.tick(now);                       // finish any movement waiting on release
+  if (G.screen==='pinch') PC.update(now);
 
   if (G.screen==='tutorial'){
     const b = TUT_BTN();
@@ -934,6 +970,55 @@ function drawHUD(now){
   }
 }
 
+function drawPinchCheck(now){
+  const s0 = G.s;
+  const pw = Math.min(G.W-40, 700*s0), ph = 400*s0, px=(G.W-pw)/2, py=Math.max(20*s0, G.H*0.13);
+  glassPanel(px,py,pw,ph,26*s0);
+
+  text('เปิด–ปิดมือ 5 ครั้ง', G.W/2, py+50*s0, 30*s0, '700');
+  text('ยกมือให้กล้องเห็น แล้วจีบนิ้วเข้า–ออกช้า ๆ จนสุด',
+       G.W/2, py+84*s0, 15.5*s0, '600', 'rgba(255,255,255,.7)');
+
+  // aperture gauge: raw scale, with the two thresholds marked
+  const gw = pw-120*s0, gx = G.W/2-gw/2, gy = py+140*s0, gh = 30*s0;
+  ctx.fillStyle='rgba(255,255,255,.13)'; rr(gx,gy,gw,gh,gh/2); ctx.fill();
+  const A0=0.3, A1=1.7;
+  const pos = a => gx + Math.max(0,Math.min(1,(a-A0)/(A1-A0)))*gw;
+  [[GRIP_CLOSE,'ปิด'],[GRIP_OPEN,'เปิด']].forEach(([v,lab])=>{
+    const x = pos(v);
+    ctx.strokeStyle='rgba(255,255,255,.8)'; ctx.lineWidth=2*s0;
+    ctx.beginPath(); ctx.moveTo(x,gy-7*s0); ctx.lineTo(x,gy+gh+7*s0); ctx.stroke();
+    text(lab, x, gy+gh+22*s0, 12*s0, '600', 'rgba(255,255,255,.65)');
+  });
+  const hasHand = P.mode==='hand' && HAND.landmarks;
+  if (hasHand){
+    const x = pos(HAND.pinchRatio);
+    ctx.fillStyle = PC.state==='closed' ? '#34d399' : '#38bdf8';
+    ctx.beginPath(); ctx.arc(x, gy+gh/2, gh*0.62, 0, 7); ctx.fill();
+  }
+
+  // one dot per completed cycle
+  const n=5, gap=44*s0, x0=G.W/2-(n-1)*gap/2, dy=py+250*s0;
+  for (let i=0;i<n;i++){
+    const done = i < PC.cycles.length;
+    ctx.beginPath(); ctx.arc(x0+i*gap, dy, done?13*s0:10*s0, 0, 7);
+    ctx.fillStyle = done ? '#4ade80' : 'rgba(255,255,255,.22)'; ctx.fill();
+    if (done){ text(String(i+1), x0+i*gap, dy, 13*s0, '700', '#04231a'); }
+  }
+  text(`${PC.cycles.length} / ${n} ครั้ง`, G.W/2, dy+38*s0, 14*s0, '600', 'rgba(255,255,255,.7)');
+
+  // live readout, or a prompt to raise the hand
+  if (hasHand){
+    const exc = PC.cycles.length ? mean(PC.cycles.map(c=>c.max-c.min)) : 0;
+    text(exc ? `ระยะเปิด–ปิดเฉลี่ย ${exc.toFixed(2)}` : 'จีบนิ้วให้สุด แล้วแบมือให้สุด',
+         G.W/2, py+ph-52*s0, 15*s0, '600', '#fcd34d');
+    if (HAND.palm < 0.45)
+      text('หันฝ่ามือเข้าหากล้องมากขึ้น', G.W/2, py+ph-26*s0, 13.5*s0, '600', '#fca5a5');
+  } else {
+    text('ยังไม่พบมือ — ยกมือขึ้นให้กล้องเห็น', G.W/2, py+ph-40*s0, 15*s0, '600', '#fca5a5');
+  }
+}
+
 function drawTutorial(now){
   const L = tutLayout(), ts = L.ts;
   const px=L.panel.x, py=L.panel.y, pw=L.panel.w, ph=L.panel.h;
@@ -1055,6 +1140,7 @@ function loop(now){
   if (G.screen!=='start'){
     drawScrim();
     drawHand();
+    if (G.screen==='pinch')    drawPinchCheck(now);
     if (G.screen==='tutorial') drawTutorial(now);
     if (G.screen==='play' || G.screen==='win'){
       drawHUD(now);
@@ -1094,6 +1180,8 @@ const STAT_COLS = [
   'plan_ms','solve_ms','move_ms','grasp_ms',
   'path_pct','dist_pct','path_ratio','peak_vel','ttp_pct','submoves','drop_err_pct','to_slot',
   'attempts','misplaced','pickups','fail_grasp','hint_used','completed',
+  'ap_max','ap_min','ap_exc','close_ms','release_ms','hold_sd','palm_face','cycles','cycle_ms',
+  'grip_close_th','grip_open_th',
   'score','rounds_done','rounds_total','q_per_level','duration_ms','no_hand_ms','ended_early','end_reason',
   'input','fps_mean','fps_min','screen','ua','app','bank'
 ];
@@ -1178,6 +1266,7 @@ STATS.endSession = function(reason){
     type:'session', score:G.score, rounds_done:G.solved, rounds_total:G.totalRounds, q_per_level:G.qPerStage,
     duration_ms:Math.round(performance.now()-s.t0),
     ended_early: reason==='finished' ? 0 : 1, end_reason:reason||'',
+    grip_close_th:GRIP_CLOSE, grip_open_th:GRIP_OPEN,
     fps_mean: fps.length ? +(fps.reduce((a,b)=>a+b,0)/fps.length).toFixed(1) : '',
     fps_min : fps.length ? +Math.min.apply(null,fps).toFixed(1) : ''
   });
@@ -1219,7 +1308,19 @@ addEventListener('visibilitychange', ()=>{ if (document.visibilityState==='hidde
 const MV = { cur:null };
 
 MV.begin = function(card, now){
+  if (this.pending) this.flush(now, true);          // never lose a row
+  /* look back through the aperture trace: the most recent moment the hand was
+     open marks the start of closing, and the peak in that window is the
+     maximum aperture the patient actually achieved before gripping        */
+  const win = AP.window(now-1000);
+  let apMax = 0, onset = null;
+  for (let i=win.length-1; i>=0; i--){
+    if (win[i].v > apMax) apMax = win[i].v;
+    if (onset===null && win[i].v >= GRIP_OPEN) onset = win[i].t;
+  }
   this.cur = {
+    apMax: apMax || '', closeMs: onset!==null ? Math.round(now-onset) : '',
+    ap:[], palm:[],
     t0:now, card:card.th, from:(card.slot===null?-1:card.slot),
     grasp: P.mode==='mouse' ? 'mouse' : (HAND.curled>=3 ? 'fist' : 'pinch'),
     graspMs: G.hoverSince ? Math.round(now-G.hoverSince) : '',
@@ -1231,6 +1332,7 @@ MV.sample = function(now, dt){
   const d = Math.hypot(P.x-m.px, P.y-m.py);
   m.path += d; m.v.push(d/dt*1000); m.t.push(now-m.t0);
   m.px=P.x; m.py=P.y;
+  if (P.mode==='hand'){ m.ap.push(HAND.pinchRatio); m.palm.push(HAND.palm); }
 };
 MV.end = function(card, slotIdx, now){
   const m = this.cur; this.cur = null;
@@ -1248,14 +1350,90 @@ MV.end = function(card, slotIdx, now){
 
   const err = slotIdx>=0 && G.slots[slotIdx]
             ? Math.hypot(card.x-G.slots[slotIdx].x, card.y-G.slots[slotIdx].y) : '';
-  STATS.logMovement({
+
+  const apMin = m.ap.length ? Math.min.apply(null,m.ap) : '';
+  const row = {
     card_th:m.card, grasp:m.grasp, grasp_ms:m.graspMs,
     move_ms:Math.round(dur), path_pct:pct(m.path), dist_pct:pct(dist),
     path_ratio: dist>4 ? +(m.path/dist).toFixed(2) : '',
     peak_vel: pct(peak), ttp_pct: dur>0 ? +((m.t[peakI]/dur)*100).toFixed(1) : '',
     submoves: Math.max(1,sub), drop_err_pct: err==='' ? '' : pct(err),
-    to_slot: slotIdx>=0 ? slotIdx+1 : -1
-  });
+    to_slot: slotIdx>=0 ? slotIdx+1 : -1,
+    // ---- grasp mechanics ----
+    ap_max: m.apMax==='' ? '' : +m.apMax.toFixed(3),
+    ap_min: apMin==='' ? '' : +apMin.toFixed(3),
+    ap_exc: (m.apMax!=='' && apMin!=='') ? +(m.apMax-apMin).toFixed(3) : '',
+    close_ms: m.closeMs,
+    hold_sd: m.ap.length>2 ? +sd(m.ap).toFixed(3) : '',
+    palm_face: m.palm.length ? +mean(m.palm).toFixed(2) : ''
+  };
+
+  /* Release is the half that is usually harder after stroke, and it happens
+     AFTER the card is dropped — so hold the row open until the hand actually
+     opens, then log it.                                                    */
+  if (P.mode === 'hand'){ this.pending = { row, t0:now }; }
+  else { row.release_ms=''; STATS.logMovement(row); }
+};
+
+MV.tick = function(now){
+  const p = this.pending; if (!p) return;
+  const open = HAND.landmarks && HAND.pinchRatio >= GRIP_OPEN;
+  if (open || now - p.t0 > 1500) this.flush(now, !open);
+};
+MV.flush = function(now, timedOut){
+  const p = this.pending; if (!p) return;
+  this.pending = null;
+  p.row.release_ms = timedOut ? '' : Math.round(now - p.t0);   // blank = unreliable
+  STATS.logMovement(p.row);
+};
+
+/* =========================================================================
+   PINCH CHECK — 10 seconds of open/close, uncontaminated by reaching,
+   card position or reading load. Gives a clean baseline for the session.
+   ========================================================================= */
+const PC = {
+  active:false, t0:0, cycles:[], state:'open', curMin:9, curMax:0, lastEdge:0, skipped:false
+};
+PC.start = function(now){
+  this.active=true; this.t0=now; this.cycles=[]; this.state='open';
+  this.curMin=9; this.curMax=0; this.lastEdge=now; this.skipped=false;
+};
+PC.update = function(now){
+  if (!this.active) return;
+  const elapsed = now - this.t0;
+  if (P.mode==='hand' && HAND.landmarks){
+    const a = HAND.pinchRatio;
+    if (this.state==='open'){
+      if (a > this.curMax) this.curMax = a;
+      if (a < GRIP_CLOSE){ this.state='closed'; this.curMin = a; }
+    } else {
+      if (a < this.curMin) this.curMin = a;
+      if (a > GRIP_OPEN + 0.05){                       // one full open→close→open
+        this.cycles.push({ max:this.curMax, min:this.curMin, ms:now-this.lastEdge });
+        this.lastEdge = now; this.state='open'; this.curMax=a; this.curMin=9;
+      }
+    }
+  }
+  if (this.cycles.length >= 5 || elapsed > 20000) this.finish(false);
+};
+PC.finish = function(skipped){
+  if (!this.active) return;
+  this.active = false; this.skipped = skipped;
+  const c = this.cycles;
+  if (!skipped && c.length){
+    STATS.push({
+      type:'pinchcheck',
+      cycles:c.length,
+      ap_max:+mean(c.map(x=>x.max)).toFixed(3),
+      ap_min:+mean(c.map(x=>x.min)).toFixed(3),
+      ap_exc:+(mean(c.map(x=>x.max))-mean(c.map(x=>x.min))).toFixed(3),
+      cycle_ms:Math.round(mean(c.map(x=>x.ms))),
+      palm_face:+mean(AP.window(this.t0).map(s=>s.palm)).toFixed(2) || '',
+      grip_close_th:GRIP_CLOSE, grip_open_th:GRIP_OPEN
+    });
+  }
+  G.screen = 'tutorial';
+  showScreen('tutorial');
 };
 
 /* =========================================================================
@@ -1265,11 +1443,13 @@ MV.end = function(card, slotIdx, now){
 const startScreenEl = document.getElementById('startScreen');
 const formScreen    = document.getElementById('formScreen');
 
+const pinchBar = document.getElementById('pinchBar');
 function showScreen(which){
   startScreenEl.classList.toggle('hidden', which!=='start');
   formScreen   .classList.toggle('hidden', which!=='form');
   endScreen    .classList.toggle('hidden', which!=='end');
   topBar       .classList.toggle('hidden', which!=='game');
+  pinchBar     .classList.toggle('hidden', which!=='pinch');
 }
 
 /* --- start → form (camera boots in the background while they type) --- */
@@ -1312,14 +1492,20 @@ document.getElementById('btnForm').addEventListener('click', ()=>{
   PLAYER.posture = document.getElementById('fPose').value;
   setQuestionsPerStage(document.getElementById('fQ').value);
   rememberName(name);
-  showScreen('tutorial');
-  G.screen = 'tutorial';
+  STATS.start();                                  // session opens here
+  if (G.aiState === 'unavailable'){               // no camera → nothing to measure
+    G.screen = 'tutorial'; showScreen('tutorial');
+  } else {
+    G.screen = 'pinch'; showScreen('pinch'); PC.start(performance.now());
+  }
 });
+document.getElementById('btnSkipPinch').addEventListener('click', ()=>PC.finish(true));
 
 /* --- start a run (called from the tutorial button) --- */
 function startRun(){
   G.screen='play'; G.level=0; G.score=0; G.solved=0; G.endHold=0;
-  STATS.start(); buildPlaylist(); buildLevel(0);
+  if (!STATS.session) STATS.start();
+  buildPlaylist(); buildLevel(0);
   showScreen('game');
 }
 
@@ -1327,6 +1513,7 @@ function startRun(){
 function endGame(reason){
   if (G.screen!=='play' && G.screen!=='win') return;
   const lv = G.playlist[G.level];
+  MV.flush(performance.now(), true);                   // don't drop an open movement
   if (STATS.round && lv) STATS.logRound(lv, false);     // partial round is still data
   STATS.endSession(reason);
   MV.cur = null; G.held = null; G.hover = null; G.banner = null; G.endHold = 0;
@@ -1353,7 +1540,7 @@ document.getElementById('btnNextPlayer').addEventListener('click', ()=>{
   resetForm(); G.screen='form'; showScreen('form');
 });
 document.getElementById('btnAgain').addEventListener('click', ()=>{   // same player, new session
-  startRun();
+  STATS.start(); startRun();
 });
 document.getElementById('btnCsv').addEventListener('click', ()=>STATS.download());
 document.getElementById('btnFit').addEventListener('click', ()=>
