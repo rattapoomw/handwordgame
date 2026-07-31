@@ -878,12 +878,19 @@ function drawCard(c, now){
    the panel ends so cards never land underneath it.                        */
 function hudGeom(){
   const wide = G.W >= 760;                       // room for a separate score chip?
-  const py = 16*G.s, ph = 124*G.s;
-  const chip = wide ? { w:196*G.s, h:78*G.s, x:22*G.s, y:py } : null;
+  const py = 14*G.s;
+  const chip = wide ? { w:215*G.s, h:88*G.s, x:20*G.s, y:py } : null;
   // centred panel must not collide with the left-hand chip
-  const cap = chip ? G.W - 2*(chip.x + chip.w + 14*G.s) : G.W - 32*G.s;
-  const pw = Math.max(240*G.s, Math.min(cap, 760*G.s));
-  return { wide, chip, py, ph, pw, px:(G.W-pw)/2, pipY: py+ph+16*G.s };
+  const cap = chip ? G.W - 2*(chip.x + chip.w + 16*G.s) : G.W - 28*G.s;
+  const pw  = Math.max(250*G.s, Math.min(cap, G.W*0.80));
+
+  /* G.s is min(W/1100, H/760), so on a wide-but-short desktop window it is
+     pinned by height and the HUD ends up small relative to the screen.
+     Size the question from the panel width instead, with G.s as the floor. */
+  const qSize = Math.max(46*G.s, Math.min(pw*0.055, 120*G.s));
+  const ph    = Math.min(Math.max(124*G.s, qSize*1.75 + 34*G.s), G.H*0.21);
+
+  return { wide, chip, py, ph, pw, qSize, px:(G.W-pw)/2, pipY: py+ph+16*G.s };
 }
 const hudBottom = ()=> hudGeom().pipY + 20*G.s;
 
@@ -900,13 +907,13 @@ function drawHUD(now){
   } else {
     // no room for a chip: stage info left, score right, both inside the panel
     text(head, px+18*G.s, py+ph*0.21, 14*G.s, '600', 'rgba(255,255,255,.72)', 'left');
-    text(String(G.score), px+pw-18*G.s, py+ph*0.21, 26*G.s, '700', '#fcd34d', 'right');
+    text(String(G.score), px+pw-18*G.s, py+ph*0.20, Math.max(22, L.qSize*0.62), '700', '#fcd34d', 'right');
   }
 
   // the question itself — the thing the player is actually reading
   const showing = now < G.hintUntil;
   textFit(showing ? `“${lv.en}”` : lv.th,
-          G.W/2, py+ph*0.63, showing ? 34*G.s : 46*G.s, pw-44*G.s,
+          G.W/2, py+ph*0.62, showing ? L.qSize*0.72 : L.qSize, pw-36*G.s,
           '700', showing ? '#fcd34d' : '#fff');
 
   // progress pips for the current stage
@@ -921,9 +928,9 @@ function drawHUD(now){
   if (L.chip){
     const c = L.chip;
     glassPanel(c.x, c.y, c.w, c.h, 18*G.s);
-    text(`คะแนน · ${G.solved}/${G.totalRounds} ข้อ`,
-         c.x+c.w/2, c.y+c.h*0.27, 13*G.s, '600', 'rgba(255,255,255,.68)');
-    textFit(String(G.score), c.x+c.w/2, c.y+c.h*0.68, 42*G.s, c.w-24*G.s, '700', '#fcd34d');
+    textFit(`คะแนน · ${G.solved}/${G.totalRounds} ข้อ`,
+         c.x+c.w/2, c.y+c.h*0.26, 14*G.s, c.w-20*G.s, '600', 'rgba(255,255,255,.68)');
+    textFit(String(G.score), c.x+c.w/2, c.y+c.h*0.66, c.h*0.62, c.w-22*G.s, '700', '#fcd34d');
   }
 }
 
