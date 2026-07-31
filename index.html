@@ -26,7 +26,7 @@
   }
   html,body{height:100%;margin:0;overflow:hidden;background:#070b18;}
   body{font-family:"Noto Sans Thai","Sarabun",system-ui,sans-serif;-webkit-tap-highlight-color:transparent;}
-  #video{position:fixed;inset:0;width:100%;height:100%;object-fit:cover;transform:scaleX(-1);z-index:0;background:#070b18;}
+  #video{position:fixed;inset:0;width:100%;height:100%;object-fit:contain;transform:scaleX(-1);z-index:0;background:#070b18;}
   #canvas{position:fixed;inset:0;width:100%;height:100%;z-index:10;touch-action:none;cursor:none;}
   .layer{position:fixed;inset:0;z-index:20;pointer-events:none;}
   .glass{background:linear-gradient(160deg,rgba(255,255,255,.16),rgba(255,255,255,.06));
@@ -37,6 +37,10 @@
   @keyframes fade{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
   @media (prefers-reduced-motion: reduce){.fade-in{animation:none}}
   .hidden{display:none!important}
+  /* native <option> popups render with the OS background (white); without this
+     the white inherited text is invisible. color-scheme flips the popup dark. */
+  select, textarea, input{ color-scheme: dark; color:#fff; }
+  select option{ background:#0f172a; color:#f1f5f9; }
 </style>
 </head>
 <body class="text-white">
@@ -47,6 +51,7 @@
 <!-- ===== Top control bar (mouse clickable) ===== -->
 <div class="layer">
   <div id="topBar" class="hidden absolute top-3 right-3 flex gap-2" style="pointer-events:auto">
+    <button id="btnFit" class="glass rounded-xl px-3 py-2 text-sm font-semibold hover:bg-white/20 transition">มุมมอง: เต็มภาพ</button>
     <button id="btnHint" class="glass rounded-xl px-3 py-2 text-sm font-semibold hover:bg-white/20 transition">เฉลย (H)</button>
     <button id="btnReset" class="glass rounded-xl px-3 py-2 text-sm font-semibold hover:bg-white/20 transition">เล่นข้อนี้ใหม่</button>
   </div>
@@ -58,7 +63,7 @@
     <div class="text-6xl mb-3">🇹🇭 ✋</div>
     <h1 class="text-3xl md:text-4xl font-bold tracking-tight">เรียงประโยคไทย ด้วยมือ</h1>
     <p class="mt-2 text-white/75 leading-relaxed">
-      เกม AR ฝึกเรียงประโยคภาษาไทย · 3 ด่าน ด่านละ 5 ข้อ (3 → 4 → 5 คำ)<br>อ่านประโยคไทยที่ไม่มีการเว้นวรรค แล้วหยิบการ์ดมาเรียงให้ถูกต้อง<br>
+      เกม AR ฝึกเรียงประโยคภาษาไทย · 3 ด่าน (3 → 4 → 5 คำ)<br>อ่านประโยคไทยที่ไม่มีการเว้นวรรค แล้วหยิบการ์ดมาเรียงให้ถูกต้อง<br>
       <span class="text-white/55 text-sm">Grab floating word cards with your hand and build the sentence.</span>
     </p>
     <ul class="mt-5 text-left text-sm text-white/80 space-y-1.5">
@@ -87,6 +92,16 @@
     <datalist id="knownNames"></datalist>
     <p id="fErr" class="hidden mt-1 text-sm text-rose-300">กรุณากรอกชื่อผู้เล่นก่อน</p>
     <p id="fSeen" class="hidden mt-1 text-sm text-emerald-300"></p>
+
+    <label class="block mt-4 text-sm font-semibold">จำนวนข้อต่อด่าน</label>
+    <select id="fQ" class="mt-1 w-full rounded-xl bg-white/10 border border-white/30 px-3 py-2.5 focus:outline-none focus:border-emerald-300">
+      <option value="1">1 ข้อ/ด่าน — รวม 3 ข้อ (ทดลอง)</option>
+      <option value="2">2 ข้อ/ด่าน — รวม 6 ข้อ</option>
+      <option value="3">3 ข้อ/ด่าน — รวม 9 ข้อ</option>
+      <option value="5" selected>5 ข้อ/ด่าน — รวม 15 ข้อ</option>
+      <option value="8">8 ข้อ/ด่าน — รวม 24 ข้อ</option>
+      <option value="10">10 ข้อ/ด่าน — รวม 30 ข้อ</option>
+    </select>
 
     <div class="grid grid-cols-2 gap-3 mt-4">
       <div>
@@ -152,9 +167,15 @@ const STAGES = [
   { n:4, questions:5, label:'4 คำ' },
   { n:5, questions:5, label:'5 คำ' }
 ];
+/* set from the player form; 50 sentences per length so up to 10 stay unique */
+function setQuestionsPerStage(q){
+  q = Math.max(1, Math.min(10, parseInt(q,10)||5));
+  STAGES.forEach(st => st.questions = q);
+  G.qPerStage = q;
+  G.totalRounds = STAGES.reduce((a,st)=>a+st.questions, 0);
+}
 const POINTS_PER_QUESTION = 100;
 const MAX_WORDS  = Math.max(...STAGES.map(s=>s.n));
-const TOTAL_ROUNDS = STAGES.reduce((a,s)=>a+s.questions, 0);
 
 /* Kept inline so index.html still runs on its own if the bank file is absent */
 const FALLBACK_BANK = { sentences:[
@@ -210,6 +231,9 @@ const G = {
   level  : 0,                // index into the 15-question playlist
   playlist : [],
   solved : 0,
+  fit : 'contain',
+  qPerStage : 5,
+  totalRounds : 15,
   bankLoaded : false,
   score  : 0,
   cards  : [],
@@ -256,7 +280,7 @@ async function initHands(){
 
   camera = new Camera(video, {
     onFrame: async ()=>{ try{ await hands.send({image:video}); }catch(e){} },
-    width:640, height:480
+    width:1280, height:720          // 16:9 source ≈ 16:9 window ⇒ almost no crop
   });
   await camera.start();
   cameraReady = true;
@@ -310,14 +334,33 @@ function updateGesture(lm, now){
   HAND.grabbing = isSpread ? false : (isPinch || isFist);
 }
 
-/* ---- map normalised landmark → canvas px (object-fit:cover + mirror) ---- */
-function mapPoint(nx, ny){
-  const vw = video.videoWidth || 640, vh = video.videoHeight || 480;
+/* Where the camera image sits on screen.
+   contain → whole frame visible, letterbox bars, nothing cropped (default)
+   cover   → fills the window, crops whatever does not fit
+   Everything the hand can reach lives inside this rectangle.              */
+function videoRect(){
+  const vw = video.videoWidth, vh = video.videoHeight;
+  if (!vw || !vh) return { x:0, y:0, w:G.W, h:G.H };
   const va = vw/vh, ca = G.W/G.H;
-  let dw, dh, ox, oy;
-  if (va > ca){ dh = G.H; dw = G.H*va; ox = (G.W-dw)/2; oy = 0; }
-  else        { dw = G.W; dh = G.W/va; ox = 0; oy = (G.H-dh)/2; }
-  return { x: ox + (1-nx)*dw, y: oy + ny*dh };        // 1-nx → mirrored view
+  const fillHeight = (G.fit==='cover') ? (va > ca) : (va < ca);
+  const dh = fillHeight ? G.H : G.W/va;
+  const dw = fillHeight ? G.H*va : G.W;
+  return { x:(G.W-dw)/2, y:(G.H-dh)/2, w:dw, h:dh };
+}
+
+/* ---- map normalised landmark → canvas px (mirrored) ---- */
+function mapPoint(nx, ny){
+  const r = videoRect();
+  return { x: r.x + (1-nx)*r.w, y: r.y + ny*r.h };   // 1-nx → mirrored view
+}
+
+function setFit(mode){
+  G.fit = mode;
+  video.style.objectFit = mode;
+  store.set('thaiAR.fit', mode);
+  const b = document.getElementById('btnFit');
+  if (b) b.textContent = mode==='contain' ? 'มุมมอง: เต็มภาพ' : 'มุมมอง: เต็มจอ';
+  resize();
 }
 
 /* =========================================================================
@@ -335,7 +378,8 @@ function resize(){
 
   // shrink the card so the widest stage (5 slots) always fits the centre row
   const maxN = MAX_WORDS;
-  const gap = 16*G.s, avail = G.W - 44*G.s;
+  const vr = videoRect();
+  const gap = 16*G.s, avail = Math.min(G.W, vr.w) - 44*G.s;
   if (maxN*G.cardW + (maxN-1)*gap > avail){
     G.cardW = Math.max(64, (avail-(maxN-1)*gap)/maxN);
     G.cardH = G.cardW*158/148;
@@ -374,9 +418,14 @@ function scatterCards(){
   const rnd = mulberry32(G.seed);
   const hw = G.cardW/2, hh = G.cardH/2;
 
-  // safe rect — top clears the HUD panel, bottom clears the status bar
-  const minX = 34*G.s + hw,        maxX = G.W - 34*G.s - hw;
-  const minY = 138*G.s + hh,       maxY = G.H - 96*G.s - hh;
+  // safe rect — top clears the HUD panel, bottom clears the status bar, and
+  // the whole thing is clipped to the camera rectangle so every card is
+  // physically reachable (outside it the hand is simply not visible)
+  const vr = videoRect();
+  const minX = Math.max(34*G.s,        vr.x + 10*G.s) + hw;
+  const maxX = Math.min(G.W - 34*G.s,  vr.x + vr.w - 10*G.s) - hw;
+  const minY = Math.max(138*G.s,       vr.y + 10*G.s) + hh;
+  const maxY = Math.min(G.H - 96*G.s,  vr.y + vr.h - 10*G.s) - hh;
 
   // keep-out band around the slot row
   const s0=G.slots[0], s1=G.slots[G.slots.length-1];
@@ -852,7 +901,7 @@ function drawHUD(now){
   // score chip
   const sw=150*G.s, sh=52*G.s;
   glassPanel(22*G.s, py, sw, sh, 16*G.s);
-  text(`คะแนน · ${G.solved}/${TOTAL_ROUNDS} ข้อ`, 22*G.s+sw/2, py+sh*0.32, 11.5*G.s, '600', 'rgba(255,255,255,.65)');
+  text(`คะแนน · ${G.solved}/${G.totalRounds} ข้อ`, 22*G.s+sw/2, py+sh*0.32, 11.5*G.s, '600', 'rgba(255,255,255,.65)');
   text(String(G.score), 22*G.s+sw/2, py+sh*0.68, 22*G.s, '700', '#fcd34d');
 }
 
@@ -1003,7 +1052,7 @@ function loop(now){
    ========================================================================= */
 const APP_VERSION = '2.0-rehab';
 const STATS = {
-  URL : 'https://script.google.com/macros/s/AKfycbx-ms2fnyijVnDhKK6szcUsfRce7HOivr0B_nOWGvxYiMa9q7NEdbe4lgJXt5FA1nhuYg/exec',                       // ← paste your Apps Script /exec URL here
+  URL : '',                       // ← paste your Apps Script /exec URL here
   QKEY: 'thaiAR.queue.v2',        // pending rows (cleared after a send attempt)
   RKEY: 'thaiAR.rows.v2',         // local archive, used by the CSV button
   NKEY: 'thaiAR.names.v1',        // known player names for the datalist
@@ -1016,7 +1065,7 @@ const STAT_COLS = [
   'plan_ms','solve_ms','move_ms','grasp_ms',
   'path_pct','dist_pct','path_ratio','peak_vel','ttp_pct','submoves','drop_err_pct','to_slot',
   'attempts','misplaced','pickups','fail_grasp','hint_used','completed',
-  'score','rounds_done','rounds_total','duration_ms','no_hand_ms','ended_early','end_reason',
+  'score','rounds_done','rounds_total','q_per_level','duration_ms','no_hand_ms','ended_early','end_reason',
   'input','fps_mean','fps_min','screen','ua','app','bank'
 ];
 
@@ -1097,7 +1146,7 @@ STATS.endSession = function(reason){
   const s = this.session; if (!s) return;
   const fps = s.fps;
   this.push({
-    type:'session', score:G.score, rounds_done:G.solved, rounds_total:TOTAL_ROUNDS,
+    type:'session', score:G.score, rounds_done:G.solved, rounds_total:G.totalRounds, q_per_level:G.qPerStage,
     duration_ms:Math.round(performance.now()-s.t0),
     ended_early: reason==='finished' ? 0 : 1, end_reason:reason||'',
     fps_mean: fps.length ? +(fps.reduce((a,b)=>a+b,0)/fps.length).toFixed(1) : '',
@@ -1232,6 +1281,7 @@ document.getElementById('btnForm').addEventListener('click', ()=>{
   PLAYER.note    = document.getElementById('fNote').value.trim();
   PLAYER.side    = document.getElementById('fSide').value;
   PLAYER.posture = document.getElementById('fPose').value;
+  setQuestionsPerStage(document.getElementById('fQ').value);
   rememberName(name);
   showScreen('tutorial');
   G.screen = 'tutorial';
@@ -1251,9 +1301,9 @@ function endGame(reason){
   if (STATS.round && lv) STATS.logRound(lv, false);     // partial round is still data
   STATS.endSession(reason);
   MV.cur = null; G.held = null; G.hover = null; G.banner = null; G.endHold = 0;
-  G.screen = 'form';
+  G.screen = 'start';
   resetForm();
-  showScreen('form');
+  showScreen('start');
 }
 function resetForm(){
   document.getElementById('fName').value = '';
@@ -1277,6 +1327,8 @@ document.getElementById('btnAgain').addEventListener('click', ()=>{   // same pl
   startRun();
 });
 document.getElementById('btnCsv').addEventListener('click', ()=>STATS.download());
+document.getElementById('btnFit').addEventListener('click', ()=>
+  setFit(G.fit==='contain' ? 'cover' : 'contain'));
 document.getElementById('btnReset').addEventListener('click', ()=>{
   if (G.screen==='play') buildLevel(G.level);     // replay the current question
 });
@@ -1287,7 +1339,10 @@ window.addEventListener('keydown', e=>{
   if (e.key==='Escape') endGame('early');
 });
 
+video.addEventListener('loadedmetadata', ()=>resize());   // real aspect known now
+
 /* ---------------------------- BOOT ---------------------------- */
+setFit(store.get('thaiAR.fit') || 'contain');
 buildPlaylist();   // so the tutorial can report whether the bank loaded
 resize();
 requestAnimationFrame(loop);
