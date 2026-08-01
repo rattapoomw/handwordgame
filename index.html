@@ -259,7 +259,7 @@ const G = {
   level  : 0,                // index into the 15-question playlist
   playlist : [],
   solved : 0,
-  fit : 'contain',
+  fit : 'fill',
   qPerStage : 5,
   totalRounds : 15,
   bankLoaded : false,
@@ -487,6 +487,15 @@ function videoRect(){
   const vw = video.videoWidth, vh = video.videoHeight;
   if (!vw || !vh) return { x:0, y:0, w:G.W, h:G.H };
   const va = vw/vh, ca = G.W/G.H;
+
+  /* 'fill' scales to the window height and crops only the sides. With a 4:3
+     camera in a wide window that keeps the full vertical view — where hands
+     enter and leave — while removing the huge pillarbox bars that make the
+     bottom-corner buttons unreachable.                                     */
+  if (G.fit === 'fill'){
+    const dh = G.H, dw = G.H*va;
+    return { x:(G.W-dw)/2, y:0, w:dw, h:dh };
+  }
   const fillHeight = (G.fit==='cover') ? (va > ca) : (va < ca);
   const dh = fillHeight ? G.H : G.W/va;
   const dw = fillHeight ? G.H*va : G.W;
@@ -499,12 +508,27 @@ function mapPoint(nx, ny){
   return { x: r.x + (1-nx)*r.w, y: r.y + ny*r.h };   // 1-nx → mirrored view
 }
 
+const FITS = ['fill','contain','cover'];
+const FIT_LABEL = { fill:'พอดีความสูง', contain:'เต็มภาพ', cover:'เต็มจอ' };
+/* Where a hand can be seen AND drawn: the camera view clipped to the window.
+   In 'fill'/'cover' the video overflows the window, so videoRect alone would
+   place a control off-screen; in 'contain' it is the video rect itself.    */
+function reachRect(){
+  const v = videoRect();
+  const x0 = Math.max(0, v.x), y0 = Math.max(0, v.y);
+  const x1 = Math.min(G.W, v.x+v.w), y1 = Math.min(G.H, v.y+v.h);
+  return { x:x0, y:y0, w:Math.max(40, x1-x0), h:Math.max(40, y1-y0) };
+}
+
 function setFit(mode){
+  if (FITS.indexOf(mode) < 0) mode = 'fill';
   G.fit = mode;
-  video.style.objectFit = mode;
+  // 'fill' is height-fill with side crop, which is what CSS cover does when the
+  // source is narrower than the window; contain/cover map directly.
+  video.style.objectFit = (mode==='contain') ? 'contain' : 'cover';
   store.set('thaiAR.fit', mode);
   const b = document.getElementById('btnFit');
-  if (b) b.textContent = mode==='contain' ? 'มุมมอง: เต็มภาพ' : 'มุมมอง: เต็มจอ';
+  if (b) b.textContent = 'มุมมอง: ' + FIT_LABEL[mode];
   resize();
 }
 
@@ -523,7 +547,7 @@ function resize(){
 
   // shrink the card so the widest stage (5 slots) always fits the centre row
   const maxN = MAX_WORDS;
-  const vr = videoRect();
+  const vr = reachRect();
   const gap = 16*G.s, avail = Math.min(G.W, vr.w) - 44*G.s;
   if (maxN*G.cardW + (maxN-1)*gap > avail){
     G.cardW = Math.max(64, (avail-(maxN-1)*gap)/maxN);
@@ -566,7 +590,7 @@ function scatterCards(){
   // safe rect — top clears the HUD panel, bottom clears the status bar, and
   // the whole thing is clipped to the camera rectangle so every card is
   // physically reachable (outside it the hand is simply not visible)
-  const vr = videoRect();
+  const vr = reachRect();
   const minX = Math.max(34*G.s,        vr.x + 10*G.s) + hw;
   const maxX = Math.min(G.W - 34*G.s,  vr.x + vr.w - 10*G.s) - hw;
   const minY = Math.max(hudBottom(),   vr.y + 10*G.s) + hh;
@@ -757,8 +781,10 @@ window.addEventListener('touchend',  ()=>{ MOUSE.down=false; MOUSE.lastMove=perf
    between the top margin and the status bar. On short windows everything
    scales down together (ts) instead of the button sliding under the panel. */
 function tutLayout(){
-  const top   = 20*G.s;
-  const bottom= G.H - 96*G.s;                       // clear the bottom status bar
+  // the green button is pinch-operated, so the stack lives inside the camera view
+  const vr = reachRect();
+  const top   = Math.max(20*G.s, vr.y + 10*G.s);
+  const bottom= Math.min(G.H - 96*G.s, vr.y + vr.h - 10*G.s);
   const avail = Math.max(180, bottom - top);
 
   const PANEL=430, GAP=26, BTN=92;                  // design units at scale 1
@@ -767,25 +793,30 @@ function tutLayout(){
   const ts    = Math.max(0.40, Math.min(G.s, avail/needU));
 
   const ph = PANEL*ts, bh = BTN*ts, warn = warnU*ts;
-  const pw = Math.min(G.W-40, 680*ts);
-  const bw = Math.min(G.W-60, 330*ts);
+  const pw = Math.min(G.W-40, vr.w-24*ts, 680*ts);
+  const bw = Math.min(G.W-60, vr.w-40*ts, 330*ts);
   const total = ph + warn + GAP*ts + bh;
   const y0 = top + Math.max(0, (avail-total)/2);
 
   return {
     ts,
-    panel:{ x:(G.W-pw)/2, y:y0, w:pw, h:ph },
+    panel:{ x:vr.x+(vr.w-pw)/2, y:y0, w:pw, h:ph },
     warnY: y0 + ph + 15*ts,
-    btn  : { x:G.W/2, y:y0 + ph + warn + GAP*ts + bh/2, w:bw, h:bh }
+    btn  : { x:vr.x+vr.w/2, y:y0 + ph + warn + GAP*ts + bh/2, w:bw, h:bh }
   };
 }
 const TUT_BTN = ()=> tutLayout().btn;
 
 /* จบเกม lives bottom-left: cards never scatter below G.H-96*s, so it is
    always clear of them, and it is reachable by hand as well as by mouse.  */
+/* Anything the hand must touch has to sit inside the camera rectangle —
+   outside it the webcam simply cannot see the hand, so a button in the
+   letterbox bar is unreachable by hand even though the mouse can click it. */
 function endBtnRect(){
-  const w = Math.min(184*G.s, G.W*0.36), h = 54*G.s;
-  return { x: 18*G.s + w/2, y: G.H - 18*G.s - h/2, w, h };
+  const r = reachRect();
+  const w = Math.min(184*G.s, r.w*0.36), h = 54*G.s;
+  const m = 14*G.s;
+  return { x: r.x + m + w/2, y: r.y + r.h - m - h/2, w, h };
 }
 
 /* nearest card whose (generously padded) box contains the cursor */
@@ -919,6 +950,29 @@ function textFit(str,x,y,size,maxW,weight='600',color='#fff',align='center'){
   ctx.font=`${weight} ${size}px "Noto Sans Thai","Sarabun","Segoe UI Emoji","Apple Color Emoji",sans-serif`;
   const w = ctx.measureText(str).width;
   text(str, x, y, w>maxW ? size*maxW/w : size, weight, color, align);
+}
+
+/* Make the unreachable letterbox area obvious: darken it and outline the
+   camera view, so it is visually clear where a hand can and cannot be seen. */
+function drawReachFrame(){
+  const vr = videoRect();
+  const bars = vr.x > 1 || vr.y > 1;
+  if (!bars) return;
+  ctx.save();
+  ctx.fillStyle = 'rgba(3,6,16,.72)';
+  if (vr.x > 1){                                  // pillarbox
+    ctx.fillRect(0,0,vr.x,G.H);
+    ctx.fillRect(vr.x+vr.w,0,G.W-vr.x-vr.w,G.H);
+  }
+  if (vr.y > 1){                                  // letterbox
+    ctx.fillRect(0,0,G.W,vr.y);
+    ctx.fillRect(0,vr.y+vr.h,G.W,G.H-vr.y-vr.h);
+  }
+  ctx.strokeStyle='rgba(56,189,248,.32)'; ctx.lineWidth=1.5;
+  ctx.setLineDash([10,8]);
+  ctx.strokeRect(vr.x+.75, vr.y+.75, vr.w-1.5, vr.h-1.5);
+  ctx.setLineDash([]);
+  ctx.restore();
 }
 
 function drawScrim(){
@@ -1134,7 +1188,7 @@ function drawTutorial(now){
   const L = tutLayout(), ts = L.ts;
   const px=L.panel.x, py=L.panel.y, pw=L.panel.w, ph=L.panel.h;
   glassPanel(px,py,pw,ph,26*ts);
-  text('วิธีเล่น · How to play', G.W/2, py+46*ts, 28*ts, '700');
+  text('วิธีเล่น · How to play', px+pw/2, py+46*ts, 28*ts, '700');
 
   const rows=[
     ['\u{1F90F}','จีบนิ้ว (โป้งแตะชี้)','หยิบการ์ด'],
@@ -1163,12 +1217,12 @@ function drawTutorial(now){
                        :  G.camMsg ? G.camMsg.th
                        :  G.aiState==='unavailable' ? 'ไม่มีกล้อง — ใช้เมาส์คลิกปุ่มได้เลย'
                        :  'ยกมือขึ้นให้กล้องเห็น'),
-       G.W/2, py+ph-30*ts, 14*ts, '600',
+       px+pw/2, py+ph-30*ts, 14*ts, '600',
        HAND.grabbing ? '#4ade80' : 'rgba(255,255,255,.65)');
 
   if (!G.bankLoaded)
     textFit('\u26A0\uFE0F ไม่พบ thai_sentences.js — ใช้ประโยคตัวอย่าง 6 ประโยค',
-            G.W/2, L.warnY, 13*ts, G.W-60, '600', '#fca5a5');
+            px+pw/2, L.warnY, 13*ts, pw-20*ts, '600', '#fca5a5');
 
   // green floating button — always below the panel, never under it
   const b=L.btn, on = G.hover==='btn';
@@ -1230,8 +1284,12 @@ function drawStatus(now){
             : G.aiState==='unavailable' ? '🖱  ใช้เมาส์ลากการ์ดได้เลย'
             : '👋  กำลังมองหามือของคุณ... / Looking for your hand...';
   const playing = (G.screen==='play'||G.screen==='win');
-  const pw=Math.min(G.W-60, 380*G.s), ph=54*G.s, px=(G.W-pw)/2;
-  const py=G.H-ph-22*G.s - (playing && G.W<760 ? 66*G.s : 0);   // clear จบเกม
+  const vr = reachRect();
+  const pw=Math.min(G.W-60, vr.w-24*G.s, 380*G.s), ph=54*G.s, px=vr.x+(vr.w-pw)/2;
+  const eb = endBtnRect();
+  let py = Math.min(vr.y+vr.h, G.H) - ph - 22*G.s;
+  // if the status bar would sit on the จบเกม button, lift it above
+  if (playing && px < eb.x+eb.w/2+10*G.s && py < eb.y+eb.h/2) py = eb.y - eb.h/2 - ph - 12*G.s;
   ctx.save(); ctx.globalAlpha=0.55+Math.sin(now/420)*0.25;
   glassPanel(px,py,pw,ph,16*G.s);
   textFit(msg, G.W/2, py+ph/2, 14.5*G.s, pw-28*G.s, '600', G.camMsg ? '#fca5a5' : '#fde68a');
@@ -1255,6 +1313,7 @@ function loop(now){
   ctx.clearRect(0,0,G.W,G.H);
   if (G.screen!=='start'){
     drawScrim();
+    drawReachFrame();
     drawHand();
     if (G.screen==='pinch')    drawPinchCheck(now);
     if (G.screen==='tutorial') drawTutorial(now);
@@ -1691,7 +1750,7 @@ document.getElementById('btnAgain').addEventListener('click', ()=>{   // same pl
 });
 document.getElementById('btnCsv').addEventListener('click', ()=>STATS.download());
 document.getElementById('btnFit').addEventListener('click', ()=>
-  setFit(G.fit==='contain' ? 'cover' : 'contain'));
+  setFit(FITS[(FITS.indexOf(G.fit)+1) % FITS.length]));
 document.getElementById('btnReset').addEventListener('click', ()=>{
   if (G.screen==='play') buildLevel(G.level);     // replay the current question
 });
@@ -1705,7 +1764,7 @@ window.addEventListener('keydown', e=>{
 video.addEventListener('loadedmetadata', ()=>resize());   // real aspect known now
 
 /* ---------------------------- BOOT ---------------------------- */
-setFit(store.get('thaiAR.fit') || 'contain');
+setFit(store.get('thaiAR.fit') || 'fill');
 buildPlaylist();   // so the tutorial can report whether the bank loaded
 resize();
 requestAnimationFrame(loop);
