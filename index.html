@@ -136,13 +136,13 @@
         <label class="block text-sm font-semibold">ข้างที่ใช้ฝึก</label>
         <select id="fSide" class="mt-1 w-full rounded-xl bg-white/10 border border-white/30 px-3 py-2.5 focus:outline-none focus:border-emerald-300">
           <option value="">-</option><option value="left">ซ้าย</option>
-          <option value="right">ขวา</option><option value="both">ทั้งสองข้าง</option>
+          <option value="right">ขวา</option><option value="both" selected>ทั้งสองข้าง</option>
         </select>
       </div>
       <div>
         <label class="block text-sm font-semibold">ท่าทาง</label>
         <select id="fPose" class="mt-1 w-full rounded-xl bg-white/10 border border-white/30 px-3 py-2.5 focus:outline-none focus:border-emerald-300">
-          <option value="">-</option><option value="sit">นั่ง</option>
+          <option value="">-</option><option value="sit" selected>นั่ง</option>
           <option value="stand">ยืน</option><option value="wheelchair">รถเข็น</option>
         </select>
       </div>
@@ -1761,6 +1761,13 @@ document.getElementById('btnStart').addEventListener('click', async ()=>{
 });
 document.getElementById('btnBackStart').addEventListener('click', ()=>showScreen('start'));
 
+/* form defaults from config.js (side / posture / questions per stage) */
+function applyFormDefaults(){
+  const side = document.getElementById('fSide'), pose = document.getElementById('fPose');
+  if (side) side.value = CF('game.defaultSide', 'both');
+  if (pose) pose.value = CF('game.defaultPosture', 'sit');
+}
+
 /* questions-per-stage choices come from config.js */
 (function buildQuestionOptions(){
   const sel = document.getElementById('fQ'); if (!sel) return;
@@ -1769,6 +1776,7 @@ document.getElementById('btnBackStart').addEventListener('click', ()=>showScreen
   sel.innerHTML = opts.map(q =>
     `<option value="${q}"${q===dflt?' selected':''}>${q} ข้อ/ด่าน — รวม ${q*STAGES.length} ข้อ</option>`).join('');
   setQuestionsPerStage(dflt);
+  applyFormDefaults();
 })();
 
 function refreshNameList(){
@@ -1829,6 +1837,7 @@ function endGame(reason){
 function resetForm(){
   document.getElementById('fName').value = '';
   document.getElementById('fNote').value = '';
+  applyFormDefaults();                       // next patient starts from the defaults
   document.getElementById('fSeen').classList.add('hidden');
   document.getElementById('fErr').classList.add('hidden');
   refreshNameList();

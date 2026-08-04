@@ -19,7 +19,7 @@ window.APP_CONFIG = {
      Apps Script ▸ Deploy ▸ Web app ▸ Execute as: Me ▸ Who has access: Anyone
      Paste the URL that ends in /exec (not /dev).
      ----------------------------------------------------------------------- */
-  endpoint : 'https://script.google.com/macros/s/AKfycbx-ms2fnyijVnDhKK6szcUsfRce7HOivr0B_nOWGvxYiMa9q7NEdbe4lgJXt5FA1nhuYg/exec',
+  endpoint : '',
 
   /* Only if you set READ_KEY in apps_script_stats.gs. Note this is visible to
      anyone who views the page source — it deters casual access, nothing more. */
@@ -30,15 +30,15 @@ window.APP_CONFIG = {
 
   /* Satisfaction survey shown on the end screen. Paste a Google Form link
      (the "Send ▸ 🔗 link" URL). Leave '' and the button is hidden.
- 
+
      Tip: a Form can be pre-filled from the URL. Get a prefilled link via
      Google Forms ▸ ⋮ ▸ Get pre-filled link, then paste the entry.xxxxx id
      below and the game will pass the player's name through automatically,
      so the patient does not have to type it twice.                        */
   survey: {
-    url        : 'https://docs.google.com/forms/d/e/1FAIpQLSdYeMV0lco5eTKzyoFMo3QPdYY_7hZpexlrsSOqvP8JWgBegA/viewform',     // e.g. 'https://docs.google.com/forms/d/e/XXXX/viewform'
-    nameField  : 'entry.1022541388',     // e.g. 'entry.1234567890'  (optional)
-    sidField   : 'entry.1333325407'      // e.g. 'entry.0987654321'  (optional, links the form to the session)
+    url        : '',     // e.g. 'https://docs.google.com/forms/d/e/XXXX/viewform'
+    nameField  : '',     // e.g. 'entry.1234567890'  (optional)
+    sidField   : ''      // e.g. 'entry.0987654321'  (optional, links the form to the session)
   },
 
 
@@ -51,7 +51,13 @@ window.APP_CONFIG = {
     questionsPerStage : 5,
     questionOptions   : [1, 2, 3, 5, 8, 10],
 
-    pointsPerQuestion : 10,
+    pointsPerQuestion : 100,
+
+    /* Pre-selected values on the player form.
+       side:    'left' | 'right' | 'both' | ''   ('' = force a choice)
+       posture: 'sit'  | 'stand' | 'wheelchair' | ''                     */
+    defaultSide    : 'both',
+    defaultPosture : 'sit',
 
     /* Camera framing on first run: 'fill' (height-fill, sides cropped —
        best for a 4:3 webcam on a wide screen), 'contain', or 'cover'.       */
