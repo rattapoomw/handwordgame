@@ -19,7 +19,7 @@ window.APP_CONFIG = {
      Apps Script ▸ Deploy ▸ Web app ▸ Execute as: Me ▸ Who has access: Anyone
      Paste the URL that ends in /exec (not /dev).
      ----------------------------------------------------------------------- */
-  endpoint : '',
+  endpoint : 'https://script.google.com/macros/s/AKfycbx-ms2fnyijVnDhKK6szcUsfRce7HOivr0B_nOWGvxYiMa9q7NEdbe4lgJXt5FA1nhuYg/exec',
 
   /* Only if you set READ_KEY in apps_script_stats.gs. Note this is visible to
      anyone who views the page source — it deters casual access, nothing more. */
@@ -38,7 +38,7 @@ window.APP_CONFIG = {
     questionsPerStage : 5,
     questionOptions   : [1, 2, 3, 5, 8, 10],
 
-    pointsPerQuestion : 100,
+    pointsPerQuestion : 10,
 
     /* Camera framing on first run: 'fill' (height-fill, sides cropped —
        best for a 4:3 webcam on a wide screen), 'contain', or 'cover'.       */
