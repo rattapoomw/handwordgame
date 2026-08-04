@@ -173,6 +173,10 @@
     <button id="btnAgain" class="mt-3 w-full rounded-2xl glass hover:bg-white/20 transition px-6 py-3 text-sm font-semibold">
       เล่นอีกครั้ง (คนเดิม)
     </button>
+    <button id="btnSurvey" class="hidden mt-4 w-full rounded-2xl bg-sky-500 hover:bg-sky-400 active:scale-[.99] transition px-6 py-3.5 text-base font-bold"
+            style="box-shadow:0 10px 26px rgba(14,165,233,.4), inset 0 1px 0 rgba(255,255,255,.45)">
+      📝 แบบประเมินความพึงพอใจ
+    </button>
     <div id="syncEnd" class="mt-4 text-sm"></div>
     <button id="btnCsv" class="mt-3 w-full rounded-2xl glass hover:bg-white/20 transition px-6 py-3 text-sm font-semibold">
       ⬇️ ดาวน์โหลดสถิติ (CSV)
@@ -1452,6 +1456,7 @@ STATS.logMovement = function(m){
 /* ---- session close ---------------------------------------------------- */
 STATS.endSession = function(reason){
   const s = this.session; if (!s) return;
+  this.lastSid = s.sid;
   const fps = s.fps;
   this.push({
     type:'session', score:G.score, rounds_done:G.solved, rounds_total:G.totalRounds, q_per_level:G.qPerStage,
@@ -1837,6 +1842,30 @@ function showEnd(){
   document.getElementById('finalCount').textContent = G.solved;
   showScreen('end');
 }
+/* Satisfaction survey — opens the Google Form from config.js in a new tab.
+   Name and session id are passed as prefill parameters when those entry ids
+   are configured, so the patient does not retype what we already know.     */
+function surveyURL(){
+  const base = CF('survey.url', '');
+  if (!base) return '';
+  const p = [];
+  const nf = CF('survey.nameField',''), sf = CF('survey.sidField','');
+  if (nf && PLAYER.name) p.push(nf + '=' + encodeURIComponent(PLAYER.name));
+  if (sf && STATS.lastSid) p.push(sf + '=' + encodeURIComponent(STATS.lastSid));
+  if (!p.length) return base;
+  return base + (base.includes('?') ? '&' : '?') + 'usp=pp_url&' + p.join('&');
+}
+(function initSurvey(){
+  const b = document.getElementById('btnSurvey');
+  b.classList.toggle('hidden', !CF('survey.url',''));
+  b.addEventListener('click', ()=>{
+    const u = surveyURL(); if (!u) return;
+    window.open(u, '_blank', 'noopener');
+    b.textContent = '✓ เปิดแบบประเมินแล้ว';
+    setTimeout(()=>{ b.textContent = '📝 แบบประเมินความพึงพอใจ'; }, 3000);
+  });
+})();
+
 document.getElementById('btnNextPlayer').addEventListener('click', ()=>{
   resetForm(); G.screen='form'; showScreen('form');
 });
