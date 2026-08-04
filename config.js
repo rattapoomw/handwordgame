@@ -28,6 +28,19 @@ window.APP_CONFIG = {
   /* Set false to run the game fully offline (local archive + CSV only). */
   upload   : true,
 
+  /* Satisfaction survey shown on the end screen. Paste a Google Form link
+     (the "Send ▸ 🔗 link" URL). Leave '' and the button is hidden.
+ 
+     Tip: a Form can be pre-filled from the URL. Get a prefilled link via
+     Google Forms ▸ ⋮ ▸ Get pre-filled link, then paste the entry.xxxxx id
+     below and the game will pass the player's name through automatically,
+     so the patient does not have to type it twice.                        */
+  survey: {
+    url        : 'https://docs.google.com/forms/d/e/1FAIpQLSdYeMV0lco5eTKzyoFMo3QPdYY_7hZpexlrsSOqvP8JWgBegA/viewform',     // e.g. 'https://docs.google.com/forms/d/e/XXXX/viewform'
+    nameField  : 'entry.1022541388',     // e.g. 'entry.1234567890'  (optional)
+    sidField   : 'entry.1333325407'      // e.g. 'entry.0987654321'  (optional, links the form to the session)
+  },
+
 
   /* -----------------------------------------------------------------------
      2. GAME
