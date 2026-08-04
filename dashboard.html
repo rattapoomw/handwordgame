@@ -7,6 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="config.js"></script>
 <style>
 :root{
   --paper:#FBFBF9; --card:#FFFFFF; --ink:#16202B; --ink-2:#4A5A6B; --ink-3:#8496A6;
@@ -159,10 +160,13 @@ tbody tr.click:hover{background:#FAFCFC;cursor:pointer}
         <option value="">ทั้งหมด</option><option value="30">30 วันล่าสุด</option>
         <option value="90" selected>90 วันล่าสุด</option><option value="180">180 วันล่าสุด</option>
       </select></label>
+    <div id="cfgSrc" class="psub" style="margin:-4px 0 12px"></div>
     <div style="display:flex;gap:8px;margin-top:16px">
       <button class="chipbtn primary" id="cfgSave" style="flex:1">บันทึกและโหลด</button>
+      <button class="chipbtn" id="cfgTest">ทดสอบการเชื่อมต่อ</button>
       <button class="chipbtn" id="cfgDemo">ดูตัวอย่าง</button>
     </div>
+    <div id="cfgResult" class="hidden" style="margin-top:14px;font-size:12.5px;line-height:1.6"></div>
     <div style="border-top:1px solid var(--rule);margin-top:18px;padding-top:16px">
       <div style="font-size:12px;color:var(--ink-3);margin-bottom:8px">หรือเปิดจากไฟล์ CSV ที่ดาวน์โหลดจากเกม</div>
       <input type="file" id="cfgFile" accept=".csv,text/csv" />
@@ -188,12 +192,16 @@ tbody tr.click:hover{background:#FAFCFC;cursor:pointer}
    =========================================================================== */
 
 /* ---- quality gates. Bad data is excluded, never silently averaged in ---- */
+const DCFG = (typeof window!=='undefined' && window.APP_CONFIG && window.APP_CONFIG.dashboard) || {};
+const DG = DCFG.gates || {};
 const GATE = {
-  fpsMin      : 20,    // below this, velocity/smoothness are noise
-  minDistPct  : 5,     // a nudge is not a reach
-  minMovements: 10,    // per session, before it appears on a trend
-  palmMin     : 0.45   // hand turned edge-on → aperture foreshortened
+  fpsMin      : DG.fpsMin       ?? 20,   // below this, velocity/smoothness are noise
+  minDistPct  : DG.minDistPct   ?? 5,    // a nudge is not a reach
+  minMovements: DG.minMovements ?? 10,   // per session, before it appears on a trend
+  palmMin     : DG.palmMin      ?? 0.45  // hand turned edge-on → aperture foreshortened
 };
+const LAPSED_DAYS = DCFG.lapsedDays ?? 14;
+const TREND_TH    = DCFG.trendThreshold ?? 8;
 
 const num = v => { const n = parseFloat(v); return isFinite(n) ? n : null; };
 const med = a => { if (!a.length) return null; const s=[...a].sort((x,y)=>x-y), m=s.length>>1;
@@ -400,12 +408,12 @@ function weeklyRate(sessions){
 }
 
 function statusOf(p){
-  if (p.daysSince > 14) return 'gone';
+  if (p.daysSince > LAPSED_DAYS) return 'gone';
   const ch = METRICS.map(m=>p.change[m.k]).filter(Boolean).map(c=>c.pct);
   if (ch.length < 2) return 'new';
   const mean = avg(ch);
-  if (mean >= 8)  return 'up';
-  if (mean <= -8) return 'down';
+  if (mean >=  TREND_TH) return 'up';
+  if (mean <= -TREND_TH) return 'down';
   return 'flat';
 }
 const rank = s => ({down:0, gone:1, flat:2, new:3, up:4})[s] ?? 5;
@@ -418,29 +426,61 @@ const rank = s => ({down:0, gone:1, flat:2, new:3, up:4})[s] ?? 5;
    Apps Script sits on a different origin from GitHub Pages, so a plain fetch
    is blocked by CORS. JSONP is used instead: the script tag is exempt.
    =========================================================================== */
+/* config.js supplies the defaults; anything the user types in the settings
+   dialog is stored as an override and wins until they clear it.            */
+const RAW_CFG = (typeof window !== 'undefined' && window.APP_CONFIG) || {};
+function CF(path, dflt){
+  let v = RAW_CFG;
+  for (const k of path.split('.')){
+    if (v == null || typeof v !== 'object' || !(k in v)) return dflt;
+    v = v[k];
+  }
+  return (v === undefined || v === null || v === '') ? dflt : v;
+}
+const ov = (k, dflt) => { const v = localStorage.getItem(k); return v === null ? dflt : v; };
 const CFG = {
-  get url(){ return localStorage.getItem('dash.url') || ''; },
-  set url(v){ localStorage.setItem('dash.url', v); },
-  get key(){ return localStorage.getItem('dash.key') || ''; },
-  set key(v){ localStorage.setItem('dash.key', v); },
-  get since(){ return localStorage.getItem('dash.since') ?? '90'; },
-  set since(v){ localStorage.setItem('dash.since', v); }
+  get url(){ return ov('dash.url', CF('endpoint','')); },
+  set url(v){ v === CF('endpoint','') ? localStorage.removeItem('dash.url') : localStorage.setItem('dash.url', v); },
+  get key(){ return ov('dash.key', CF('readKey','')); },
+  set key(v){ v === CF('readKey','') ? localStorage.removeItem('dash.key') : localStorage.setItem('dash.key', v); },
+  get since(){ return ov('dash.since', String(CF('dashboard.sinceDays', 90))); },
+  set since(v){ localStorage.setItem('dash.since', v); },
+  get fromConfig(){ return localStorage.getItem('dash.url') === null && !!CF('endpoint',''); },
+  clearOverrides(){ ['dash.url','dash.key','dash.since'].forEach(k=>localStorage.removeItem(k)); }
 };
 let DATA = { rows:[], sessions:[], patients:[], source:'', loadedAt:null };
-const STATE = { view:'caseload', patient:null, session:null, masked:false };
+const STATE = { view:'caseload', patient:null, session:null,
+                masked: !!CF('dashboard.maskNames', false) };
 
+/* The failure modes look identical from the outside, so distinguish them:
+     onerror            → the URL is wrong / not reachable
+     onload but no call → it responded, but not as JSONP  ⇒ stale deployment
+     neither            → timeout                                            */
 function jsonp(url, timeout=25000){
   return new Promise((res, rej)=>{
     const cb = 'dashcb_' + Math.random().toString(36).slice(2);
-    const s = document.createElement('script');
-    const t = setTimeout(()=>{ cleanup(); rej(new Error('หมดเวลารอ (timeout)')); }, timeout);
-    function cleanup(){ clearTimeout(t); delete window[cb]; s.remove(); }
-    window[cb] = d => { cleanup(); res(d); };
-    s.onerror = ()=>{ cleanup(); rej(new Error('เรียก endpoint ไม่สำเร็จ')); };
-    s.src = url + (url.includes('?')?'&':'?') + 'callback=' + cb;
-    document.head.appendChild(s);
+    const el = document.createElement('script');
+    let called = false, loaded = false;
+    const t = setTimeout(()=>{ cleanup(); rej(err(loaded ? 'stale' : 'timeout')); }, timeout);
+    function cleanup(){ clearTimeout(t); delete window[cb]; el.remove(); }
+    window[cb] = d => { called = true; cleanup(); res(d); };
+    el.onload = ()=>{
+      loaded = true;
+      // a JSONP response calls the callback synchronously while executing
+      setTimeout(()=>{ if (!called){ cleanup(); rej(err('stale')); } }, 60);
+    };
+    el.onerror = ()=>{ cleanup(); rej(err('unreachable')); };
+    el.src = url + (url.includes('?')?'&':'?') + 'callback=' + cb;
+    document.head.appendChild(el);
   });
 }
+const DIAG = {
+  stale: 'endpoint ตอบกลับแล้ว แต่ไม่ใช่รูปแบบ JSONP — เกือบทั้งหมดเกิดจาก **ยังไม่ได้ deploy สคริปต์เวอร์ชันใหม่** ' +
+         'การแก้ไฟล์ .gs อย่างเดียวไม่มีผลกับ URL เดิม ต้องไปที่ Deploy ▸ Manage deployments ▸ ✏️ ▸ Version: New version ▸ Deploy',
+  unreachable: 'เรียก URL ไม่สำเร็จ — ตรวจว่า URL ลงท้ายด้วย /exec (ไม่ใช่ /dev) และ deploy แบบ “Anyone”',
+  timeout: 'หมดเวลารอ — ชีตอาจมีข้อมูลมากเกินไป ลองจำกัดช่วงเวลาให้สั้นลง'
+};
+function err(code){ const e = new Error(DIAG[code] || code); e.code = code; return e; }
 
 async function loadFromSheet(){
   if (!CFG.url) throw new Error('ยังไม่ได้ตั้งค่า URL');
@@ -1009,7 +1049,7 @@ function buildReport(){
   const early=p.sessions.filter(s=>s.endedEarly).length;
   const pinch0=good.find(s=>s.pinchPct!=null), pinch1=[...good].reverse().find(s=>s.pinchPct!=null);
   $('repBody').innerHTML=`
-    <div class="org">แผนกกิจกรรมบำบัด</div>
+    <div class="org">${esc(CF("dashboard.clinicName","แผนกกิจกรรมบำบัด"))}</div>
     <h2 style="font-size:17px">รายงานความก้าวหน้าการฝึกด้วยเกม AR เรียงประโยคภาษาไทย</h2>
     <div class="rule"></div>
     <dl class="kv">
@@ -1058,17 +1098,48 @@ function go(v){
 document.querySelectorAll('.nav button').forEach(b=>b.onclick=()=>go(b.dataset.go));
 $('btnReport').onclick=buildReport;
 $('repClose').onclick=()=>$('report').classList.add('hidden');
+$('btnMask').textContent = STATE.masked ? '👁 แสดงชื่อ' : '🕶 ปกปิดชื่อ';
 $('btnMask').onclick=()=>{ STATE.masked=!STATE.masked;
   $('btnMask').textContent = STATE.masked?'👁 แสดงชื่อ':'🕶 ปกปิดชื่อ'; renderAll(); };
 
-$('btnCfg').onclick=()=>{ $('cfgUrl').value=CFG.url; $('cfgKey').value=CFG.key;
-  $('cfgSince').value=CFG.since; $('cfg').classList.remove('hidden'); };
+$('btnCfg').onclick=()=>{
+  $('cfgUrl').value=CFG.url; $('cfgKey').value=CFG.key; $('cfgSince').value=CFG.since;
+  $('cfgSrc').innerHTML = CFG.fromConfig
+    ? '✓ ค่าเริ่มต้นมาจากไฟล์ <span class="mono">config.js</span> — แก้ที่นี่จะบันทึกทับเฉพาะเครื่องนี้'
+    : (CF('endpoint','')
+        ? 'กำลังใช้ค่าที่ตั้งไว้เฉพาะเครื่องนี้ · <button id="cfgReset" class="underline">กลับไปใช้ค่าจาก config.js</button>'
+        : '⚠️ ยังไม่ได้ตั้ง <span class="mono">endpoint</span> ในไฟล์ <span class="mono">config.js</span>');
+  const r=$('cfgReset'); if (r) r.onclick=()=>{ CFG.clearOverrides(); $('btnCfg').onclick(); reload(); };
+  $('cfg').classList.remove('hidden');
+};
 $('cfgClose').onclick=()=>$('cfg').classList.add('hidden');
 $('cfgSave').onclick=async()=>{
   CFG.url=$('cfgUrl').value.trim(); CFG.key=$('cfgKey').value.trim(); CFG.since=$('cfgSince').value;
   $('cfg').classList.add('hidden'); await reload();
 };
 $('cfgDemo').onclick=()=>{ $('cfg').classList.add('hidden'); ingest(demoRows(),'demo'); };
+$('cfgTest').onclick=async()=>{
+  const box=$('cfgResult'); box.classList.remove('hidden');
+  const url=$('cfgUrl').value.trim();
+  if (!url){ box.innerHTML='<span style="color:var(--clay)">ยังไม่ได้ใส่ URL</span>'; return; }
+  if (!/\/exec$/.test(url)){
+    box.innerHTML='<span style="color:var(--clay)">URL ต้องลงท้ายด้วย <span class="mono">/exec</span> (ไม่ใช่ /dev หรือ /edit)</span>'; return; }
+  box.textContent='กำลังทดสอบ…';
+  let u=url+'?action=data'; const k=$('cfgKey').value.trim();
+  if (k) u+='&key='+encodeURIComponent(k);
+  try{
+    const d=await jsonp(u, 15000);
+    if (!d.ok) throw new Error(d.error||'endpoint ตอบกลับว่าไม่สำเร็จ');
+    const types={}; const ti=d.columns.indexOf('type');
+    d.rows.forEach(r=>{ const t=r[ti]||'?'; types[t]=(types[t]||0)+1; });
+    box.innerHTML=`<span style="color:var(--teal)">✓ เชื่อมต่อได้</span> —
+      ${d.rows.length.toLocaleString()} แถว · ${d.columns.length} คอลัมน์<br>
+      <span class="mono" style="font-size:11.5px">${esc(Object.entries(types).map(([k,v])=>k+':'+v).join(' · '))}</span>
+      ${d.columns.includes('ap_exc')?'':'<br><span style="color:var(--clay)">⚠️ ไม่พบคอลัมน์ ap_exc — ชีตยังเป็นสคีมาเก่า ให้ deploy สคริปต์ใหม่แล้วเล่นเกมอีกครั้ง</span>'}`;
+  }catch(e){
+    box.innerHTML=`<span style="color:var(--clay)">✕ ${esc(e.message).replace(/\*\*(.+?)\*\*/g,'<b>$1</b>')}</span>`;
+  }
+};
 $('cfgFile').onchange=e=>{
   const f=e.target.files[0]; if(!f) return;
   const rd=new FileReader();
@@ -1078,15 +1149,27 @@ $('cfgFile').onchange=e=>{
 };
 $('btnReload').onclick=reload;
 
-function showError(msg){
-  $('banners').innerHTML=`<div class="banner b-err">⚠️ <div>${esc(msg)}</div></div>`+$('banners').innerHTML;
+function showError(msg, url, code){
+  const bold = esc(msg).replace(/\*\*(.+?)\*\*/g,'<b>$1</b>');
+  const extra = url ? `<div style="margin-top:8px">
+      เปิด URL นี้ในแท็บใหม่เพื่อตรวจสอบ:
+      <a href="${esc(url)}" target="_blank" rel="noopener" style="word-break:break-all">${esc(url)}</a>
+      <div style="margin-top:6px;font-size:12px">
+        เห็นข้อความ <span class="mono">AR Thai stats endpoint is running.</span> = ยังเป็นสคริปต์เวอร์ชันเก่า ·
+        เห็น <span class="mono">{"ok":true…}</span> = สคริปต์ถูกต้องแล้ว
+      </div></div>` : '';
+  $('banners').innerHTML =
+    `<div class="banner b-err">⚠️ <div>${bold}${extra}</div></div>` + $('banners').innerHTML;
 }
 async function reload(){
   if (!CFG.url){ $('cfg').classList.remove('hidden'); return; }
   $('btnReload').disabled=true; $('btnReload').textContent='กำลังโหลด…';
   try{ const d=await loadFromSheet(); ingest(d.rows,'sheet'); }
-  catch(err){ renderAll(); showError('โหลดข้อมูลไม่สำเร็จ: '+err.message+
-    ' — ตรวจสอบว่า deploy เป็น Web app แบบ “Anyone” และใช้ URL ที่ลงท้ายด้วย /exec'); }
+  catch(e){
+    renderAll();
+    const url = CFG.url.trim() + '?action=data';
+    showError('โหลดข้อมูลไม่สำเร็จ — ' + e.message, url, e.code);
+  }
   finally{ $('btnReload').disabled=false; $('btnReload').textContent='↻ โหลดใหม่'; }
 }
 

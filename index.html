@@ -14,8 +14,11 @@
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4/hands.js" crossorigin="anonymous"></script>
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3/camera_utils.js" crossorigin="anonymous"></script>
 
-<!-- Sentence bank: keep thai_sentences.js in the same folder as index.html.
-     Loaded as a plain script (not fetch) so it also works from file://      -->
+<!-- Shared settings (endpoint URL, tuning). Edit config.js, not this file.
+     Loaded as a plain script, not fetch(), so it works from file:// too.    -->
+<script src="config.js"></script>
+
+<!-- Sentence bank: keep thai_sentences.js in the same folder as index.html. -->
 <script src="thai_sentences.js"></script>
 
 <style>
@@ -51,6 +54,7 @@
 <!-- ===== Top control bar (mouse clickable) ===== -->
 <div class="layer">
   <div id="topBar" class="hidden absolute top-3 right-3 flex gap-2" style="pointer-events:auto">
+    <button id="syncChip" class="glass rounded-xl px-3 py-2 text-sm font-semibold hover:bg-white/20 transition">☁️</button>
     <button id="btnFit" class="glass rounded-xl px-3 py-2 text-sm font-semibold hover:bg-white/20 transition">มุมมอง: เต็มภาพ</button>
     <button id="btnHint" class="glass rounded-xl px-3 py-2 text-sm font-semibold hover:bg-white/20 transition">เฉลย (H)</button>
     <button id="btnReset" class="glass rounded-xl px-3 py-2 text-sm font-semibold hover:bg-white/20 transition">เล่นข้อนี้ใหม่</button>
@@ -125,14 +129,7 @@
     <p id="fSeen" class="hidden mt-1 text-sm text-emerald-300"></p>
 
     <label class="block mt-4 text-sm font-semibold">จำนวนข้อต่อด่าน</label>
-    <select id="fQ" class="mt-1 w-full rounded-xl bg-white/10 border border-white/30 px-3 py-2.5 focus:outline-none focus:border-emerald-300">
-      <option value="1">1 ข้อ/ด่าน — รวม 3 ข้อ (ทดลอง)</option>
-      <option value="2">2 ข้อ/ด่าน — รวม 6 ข้อ</option>
-      <option value="3">3 ข้อ/ด่าน — รวม 9 ข้อ</option>
-      <option value="5" selected>5 ข้อ/ด่าน — รวม 15 ข้อ</option>
-      <option value="8">8 ข้อ/ด่าน — รวม 24 ข้อ</option>
-      <option value="10">10 ข้อ/ด่าน — รวม 30 ข้อ</option>
-    </select>
+    <select id="fQ" class="mt-1 w-full rounded-xl bg-white/10 border border-white/30 px-3 py-2.5 focus:outline-none focus:border-emerald-300"></select>
 
     <div class="grid grid-cols-2 gap-3 mt-4">
       <div>
@@ -176,6 +173,7 @@
     <button id="btnAgain" class="mt-3 w-full rounded-2xl glass hover:bg-white/20 transition px-6 py-3 text-sm font-semibold">
       เล่นอีกครั้ง (คนเดิม)
     </button>
+    <div id="syncEnd" class="mt-4 text-sm"></div>
     <button id="btnCsv" class="mt-3 w-full rounded-2xl glass hover:bg-white/20 transition px-6 py-3 text-sm font-semibold">
       ⬇️ ดาวน์โหลดสถิติ (CSV)
     </button>
@@ -189,6 +187,20 @@
    - Mouse / touch    → full fallback
    - Draw loop (rAF)  → fully independent of onResults()
    ========================================================================= */
+
+/* ---------------------------- CONFIG ----------------------------
+   Every setting is read through CF() so a missing or partial config.js
+   still leaves the game fully working on built-in defaults.            */
+const RAW_CFG = (typeof window !== 'undefined' && window.APP_CONFIG) || {};
+if (!window.APP_CONFIG) console.warn('config.js not found — using built-in defaults.');
+function CF(path, dflt){
+  let v = RAW_CFG;
+  for (const k of path.split('.')){
+    if (v == null || typeof v !== 'object' || !(k in v)) return dflt;
+    v = v[k];
+  }
+  return (v === undefined || v === null || v === '') ? dflt : v;
+}
 
 /* ---------------------------- STAGE PLAN ----------------------------
    3 stages x 5 questions = 15 rounds. Sentences are drawn at random from
@@ -205,7 +217,7 @@ function setQuestionsPerStage(q){
   G.qPerStage = q;
   G.totalRounds = STAGES.reduce((a,st)=>a+st.questions, 0);
 }
-const POINTS_PER_QUESTION = 100;
+const POINTS_PER_QUESTION = CF('game.pointsPerQuestion', 100);
 const MAX_WORDS  = Math.max(...STAGES.map(s=>s.n));
 
 /* Kept inline so index.html still runs on its own if the bank file is absent */
@@ -444,7 +456,8 @@ function d2(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
 
 /* aperture thresholds — logged with every session so a future change to them
    cannot be mistaken for a change in the patient                          */
-const GRIP_CLOSE = 0.62, GRIP_OPEN = 0.95;
+const GRIP_CLOSE = CF('grip.close', 0.62), GRIP_OPEN = CF('grip.open', 0.95);
+const FIST_FINGERS = CF('grip.fistFingers', 3);
 
 /* Aperture is measured in 2D. If the hand turns edge-on to the camera the
    thumb–index gap foreshortens and reads falsely small. The span across the
@@ -476,7 +489,7 @@ function updateGesture(lm, now){
 
   const on = HAND.grabbing;
   const isPinch  = pinch  < (on ? 0.90 : 0.62);       // loose thresholds
-  const isFist   = curled >= (on ? 2 : 3);
+  const isFist   = curled >= (on ? Math.max(1, FIST_FINGERS-1) : FIST_FINGERS);
   const isSpread = extended >= 4 && pinch > 0.95;     // open palm = release
 
   HAND.grabbing = isSpread ? false : (isPinch || isFist);
@@ -900,7 +913,7 @@ function update(now, dt){
     // จบเกม — dwell to confirm so a stray pinch cannot end the session
     const eb = endBtnRect();
     const overEnd = Math.abs(P.x-eb.x)<eb.w*0.62 && Math.abs(P.y-eb.y)<eb.h*0.85;
-    G.endHold = Math.max(0, Math.min(1, G.endHold + (overEnd && P.down ? dt/1200 : -dt/500)));
+    G.endHold = Math.max(0, Math.min(1, G.endHold + (overEnd && P.down ? dt/CF('game.endHoldMs',1200) : -dt/500)));
     if (G.endHold >= 1){ G.endHold = 0; endGame('early'); return; }
 
     // physics
@@ -1166,7 +1179,7 @@ function drawPinchCheck(now){
   }
 
   // one dot per completed cycle
-  const n=5, gap=44*s0, x0=G.W/2-(n-1)*gap/2, dy=py+250*s0;
+  const n=CF('pinchCheck.cycles',5), gap=44*s0, x0=G.W/2-(n-1)*gap/2, dy=py+250*s0;
   for (let i=0;i<n;i++){
     const done = i < PC.cycles.length;
     ctx.beginPath(); ctx.arc(x0+i*gap, dy, done?13*s0:10*s0, 0, 7);
@@ -1345,14 +1358,14 @@ function loop(now){
    ========================================================================= */
 const APP_VERSION = '2.0-rehab';
 const STATS = {
-  URL : '',                       // ← paste your Apps Script /exec URL here
+  URL : CF('upload', true) ? CF('endpoint','') : '',   // set in config.js
   QKEY: 'thaiAR.queue.v2',        // pending rows (cleared after a send attempt)
   RKEY: 'thaiAR.rows.v2',         // local archive, used by the CSV button
   NKEY: 'thaiAR.names.v1',        // known player names for the datalist
   session:null, round:null
 };
 const STAT_COLS = [
-  'type','ts','sid','player_key','display_name','note','side','posture',
+  'rid','type','ts','sid','player_key','display_name','note','side','posture',
   'round','stage','q','mv',
   'sent_id','sent_th','n_words','card_th','grasp',
   'plan_ms','solve_ms','move_ms','grasp_ms',
@@ -1401,7 +1414,7 @@ STATS.base = function(){
     app:APP_VERSION, bank:(window.THAI_BANK && window.THAI_BANK.version) || 0 };
 };
 STATS.push = function(row){
-  const full = Object.assign({}, this.base(), row);
+  const full = Object.assign({ rid: uid() }, this.base(), row);   // rid ⇒ retries can't duplicate
   const q = readRows(this.QKEY); q.push(full); store.set(this.QKEY, JSON.stringify(q));
   const a = readRows(this.RKEY); a.push(full); store.set(this.RKEY, JSON.stringify(a));
   this.flush();
@@ -1452,19 +1465,87 @@ STATS.endSession = function(reason){
   this.flush();
 };
 
-/* fire-and-forget: a no-cors POST cannot be read back, so delivery is not
-   confirmable — the local archive keeps a copy either way */
-STATS.flush = function(){
+/* ---------------------------------------------------------------------------
+   Delivery. The old version fired a no-cors POST and cleared the queue
+   immediately: unreadable response, so a failed upload looked identical to a
+   successful one and the rows were dropped either way. Now:
+     · the queue is cleared only after the server confirms the write
+     · every row carries a rid, so a retry after an unconfirmed send is safe
+     · unsent rows survive a reload, and go out on the next flush
+--------------------------------------------------------------------------- */
+STATS.sync = { state:'idle', pending:0, lastOk:null, lastErr:'', tries:0 };
+
+STATS.pendingCount = function(){ return readRows(this.QKEY).length; };
+
+STATS.flush = async function(force){
+  const q = readRows(this.QKEY);
+  this.sync.pending = q.length;
+  if (!this.URL || !q.length) { this.sync.state = this.URL ? 'idle' : 'offline'; return; }
+  if (this.sync.state === 'sending' && !force) return;
+
+  this.sync.state = 'sending';
+  const batch = q.slice(0, 400);                       // keep the request small
+  const body = JSON.stringify({ rows:batch });
+  let ok = false, err = '';
+
+  // 1. readable POST: text/plain keeps it a "simple request" (no CORS preflight,
+  //    which Apps Script cannot answer) and the reply is readable.
+  try{
+    const r = await fetch(this.URL, { method:'POST', redirect:'follow',
+      headers:{'Content-Type':'text/plain;charset=UTF-8'}, body });
+    if (r.ok){ const j = await r.json(); ok = !!j.ok; if (!ok) err = j.error || 'server refused'; }
+    else err = 'HTTP ' + r.status;
+  }catch(e){ err = e.message || 'network'; }
+
+  // 2. if the reply was unreadable, send blind and then VERIFY by counting rows
+  if (!ok){
+    try{
+      await fetch(this.URL, { method:'POST', mode:'no-cors',
+        headers:{'Content-Type':'text/plain;charset=UTF-8'}, body });
+      ok = await this.verify(batch[batch.length-1].rid);
+      if (!ok) err = err || 'ส่งแล้วแต่ยืนยันไม่ได้';
+    }catch(e){ err = err || (e.message||'network'); }
+  }
+
+  if (ok){
+    const rest = readRows(this.QKEY).filter(r => !batch.some(b => b.rid === r.rid));
+    store.set(this.QKEY, JSON.stringify(rest));
+    this.sync.pending = rest.length;
+    this.sync.state = rest.length ? 'idle' : 'ok';
+    this.sync.lastOk = Date.now(); this.sync.lastErr = ''; this.sync.tries = 0;
+    if (rest.length) setTimeout(()=>this.flush(true), 400);      // next batch
+  } else {
+    this.sync.state = 'error'; this.sync.lastErr = err; this.sync.tries++;
+    const wait = Math.min(60000, 2000 * Math.pow(2, Math.min(this.sync.tries,5)));
+    setTimeout(()=>this.flush(true), wait);                      // keep the rows, retry
+  }
+  updateSyncChip();
+};
+
+/* ask the server whether a specific rid landed — works even when the POST
+   response itself is opaque, because JSONP is never blocked by CORS */
+STATS.verify = function(rid){
+  return new Promise(res=>{
+    const cb = 'vcb_' + Math.random().toString(36).slice(2);
+    const el = document.createElement('script');
+    const t = setTimeout(()=>{ done(false); }, 12000);
+    function done(v){ clearTimeout(t); delete window[cb]; el.remove(); res(v); }
+    window[cb] = d => done(!!(d && d.ok && d.found));
+    el.onerror = ()=>done(false);
+    el.src = this.URL + '?action=has&rid=' + encodeURIComponent(rid) + '&callback=' + cb;
+    document.head.appendChild(el);
+  });
+};
+
+/* pagehide cannot await: beacon is the only thing that survives, and the rows
+   stay queued so an unconfirmed send is retried next time the game opens */
+STATS.beacon = function(){
   if (!this.URL) return;
   const q = readRows(this.QKEY); if (!q.length) return;
-  const body = JSON.stringify({ rows:q });
-  let sent = false;
-  try{ sent = navigator.sendBeacon &&
-       navigator.sendBeacon(this.URL, new Blob([body],{type:'text/plain;charset=UTF-8'})); }catch(e){}
-  if (!sent) fetch(this.URL,{ method:'POST', mode:'no-cors',
-      headers:{'Content-Type':'text/plain;charset=UTF-8'}, body }).catch(()=>{});
-  store.set(this.QKEY,'[]');
+  try{ navigator.sendBeacon(this.URL,
+    new Blob([JSON.stringify({rows:q.slice(0,200)})],{type:'text/plain;charset=UTF-8'})); }catch(e){}
 };
+
 STATS.csv = function(){
   const rows = readRows(this.RKEY);
   const esc = v => `"${String(v==null?'':v).replace(/"/g,'""')}"`;
@@ -1477,8 +1558,8 @@ STATS.download = function(){
   a.href = url; a.download = `thai_ar_log_${new Date().toISOString().slice(0,10)}.csv`;
   a.click(); setTimeout(()=>URL.revokeObjectURL(url), 1000);
 };
-addEventListener('pagehide', ()=>{ STATS.endSession('closed'); releaseCamera(); });
-addEventListener('visibilitychange', ()=>{ if (document.visibilityState==='hidden') STATS.flush(); });
+addEventListener('pagehide', ()=>{ STATS.endSession('closed'); STATS.beacon(); releaseCamera(); });
+addEventListener('visibilitychange', ()=>{ if (document.visibilityState==='hidden') STATS.beacon(); else STATS.flush(); });
 
 /* =========================================================================
    MOVEMENT TRACKER — kinematics of a single card transport
@@ -1592,7 +1673,7 @@ PC.update = function(now){
       }
     }
   }
-  if (this.cycles.length >= 5 || elapsed > 20000) this.finish(false);
+  if (this.cycles.length >= CF('pinchCheck.cycles',5) || elapsed > CF('pinchCheck.timeoutMs',20000)) this.finish(false);
 };
 PC.finish = function(skipped){
   if (!this.active) return;
@@ -1626,7 +1707,7 @@ function showScreen(which){
   startScreenEl.classList.toggle('hidden', which!=='start');
   formScreen   .classList.toggle('hidden', which!=='form');
   endScreen    .classList.toggle('hidden', which!=='end');
-  topBar       .classList.toggle('hidden', which!=='game');
+  topBar       .classList.toggle('hidden', which==='start');
   pinchBar     .classList.toggle('hidden', which!=='pinch');
 }
 
@@ -1675,6 +1756,16 @@ document.getElementById('btnStart').addEventListener('click', async ()=>{
 });
 document.getElementById('btnBackStart').addEventListener('click', ()=>showScreen('start'));
 
+/* questions-per-stage choices come from config.js */
+(function buildQuestionOptions(){
+  const sel = document.getElementById('fQ'); if (!sel) return;
+  const opts = CF('game.questionOptions', [1,2,3,5,8,10]);
+  const dflt = CF('game.questionsPerStage', 5);
+  sel.innerHTML = opts.map(q =>
+    `<option value="${q}"${q===dflt?' selected':''}>${q} ข้อ/ด่าน — รวม ${q*STAGES.length} ข้อ</option>`).join('');
+  setQuestionsPerStage(dflt);
+})();
+
 function refreshNameList(){
   document.getElementById('knownNames').innerHTML =
     knownNames().map(n=>`<option value="${n.replace(/"/g,'&quot;')}">`).join('');
@@ -1702,7 +1793,7 @@ document.getElementById('btnForm').addEventListener('click', ()=>{
   setQuestionsPerStage(document.getElementById('fQ').value);
   rememberName(name);
   STATS.start();                                  // session opens here
-  if (G.aiState === 'unavailable'){               // no camera → nothing to measure
+  if (G.aiState === 'unavailable' || !CF('pinchCheck.enabled', true)){
     G.screen = 'tutorial'; showScreen('tutorial');
   } else {
     G.screen = 'pinch'; showScreen('pinch'); PC.start(performance.now());
@@ -1741,6 +1832,7 @@ function resetForm(){
 /* --- finished all 15 --- */
 function showEnd(){
   STATS.endSession('finished');
+  updateSyncChip();
   document.getElementById('finalScore').textContent = G.score;
   document.getElementById('finalCount').textContent = G.solved;
   showScreen('end');
@@ -1757,7 +1849,37 @@ document.getElementById('btnFit').addEventListener('click', ()=>
 document.getElementById('btnReset').addEventListener('click', ()=>{
   if (G.screen==='play') buildLevel(G.level);     // replay the current question
 });
-function showHint(){ G.hintUntil = performance.now()+2500; if (STATS.round) STATS.round.hint++; }
+function updateSyncChip(){
+  const c = document.getElementById('syncChip'); if (!c) return;
+  const S = STATS.sync, n = STATS.pendingCount();
+  const map = {
+    offline:['⚠️ ยังไม่ตั้งค่าเชื่อมต่อ','text-amber-300'],
+    sending:[`⏳ กำลังส่ง ${n}`,'text-sky-300'],
+    error  :[`⚠️ ส่งไม่สำเร็จ · ค้าง ${n}`,'text-rose-300'],
+    ok     :['☁️ ส่งข้อมูลแล้ว','text-emerald-300'],
+    idle   :[n ? `☁️ รอส่ง ${n}` : '☁️ ส่งข้อมูลแล้ว', n ? 'text-amber-300' : 'text-emerald-300']
+  };
+  const [txt, cls] = map[S.state] || map.idle;
+  c.className = 'glass rounded-xl px-3 py-2 text-sm font-semibold hover:bg-white/20 transition ' + cls;
+  c.textContent = txt;
+  c.title = S.lastErr || (S.lastOk ? 'ส่งสำเร็จล่าสุด ' + new Date(S.lastOk).toLocaleTimeString('th-TH') : '');
+
+  const e = document.getElementById('syncEnd');
+  if (e){
+    if (!STATS.URL) e.innerHTML = '<span class="text-amber-300">⚠️ ยังไม่ได้ตั้งค่า STATS.URL — ข้อมูลเก็บไว้ในเครื่องเท่านั้น กดปุ่มด้านล่างเพื่อดาวน์โหลด</span>';
+    else if (n)    e.innerHTML = `<span class="text-rose-300">⚠️ ยังส่งไม่สำเร็จ ${n} แถว</span> — <button id="btnRetrySync" class="underline font-semibold">ลองส่งใหม่</button>`;
+    else           e.innerHTML = '<span class="text-emerald-300">✓ บันทึกข้อมูลขึ้น Google Sheet แล้ว</span>';
+    const b = document.getElementById('btnRetrySync');
+    if (b) b.onclick = ()=>{ STATS.flush(true); setTimeout(updateSyncChip, 900); };
+  }
+}
+setInterval(updateSyncChip, 3000);
+document.getElementById('syncChip').addEventListener('click', ()=>{
+  if (!STATS.URL){ alert('ยังไม่ได้ใส่ Apps Script URL ในไฟล์ index.html (ตัวแปร STATS.URL)'); return; }
+  STATS.flush(true); updateSyncChip();
+});
+
+function showHint(){ G.hintUntil = performance.now()+CF('game.hintMs',2500); if (STATS.round) STATS.round.hint++; }
 document.getElementById('btnHint').addEventListener('click', ()=>showHint());
 window.addEventListener('keydown', e=>{
   if (e.key==='h'||e.key==='H') showHint();
@@ -1767,7 +1889,9 @@ window.addEventListener('keydown', e=>{
 video.addEventListener('loadedmetadata', ()=>resize());   // real aspect known now
 
 /* ---------------------------- BOOT ---------------------------- */
-setFit(store.get('thaiAR.fit') || 'fill');
+setFit(store.get('thaiAR.fit') || CF('game.fit','fill'));
+STATS.flush();          // push anything left over from a previous session
+updateSyncChip();
 buildPlaylist();   // so the tutorial can report whether the bank loaded
 resize();
 requestAnimationFrame(loop);
