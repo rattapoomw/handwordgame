@@ -1,8 +1,4 @@
-/* Thai sentence bank v2 for the AR Thai Sentence Builder.
-   Every sentence has exactly ONE correct word order — checked against
-   movable time expressions, กับ/กว่า swaps, and repeated words.
-   Loaded with <script src="thai_sentences.js"></script> so it works from file://. */
-window.THAI_BANK = {
+{
   "version": 2,
   "note": "word order in \"words\" is the correct answer - shuffle it in the generator",
   "checked": "no alternative valid ordering: no movable time words, no กับ/กว่า swaps, no repeated words",
@@ -313,4 +309,4 @@ window.THAI_BANK = {
     {"id": "L5-081", "n": 5, "th": "พ่อกำลังอ่านหนังสือพิมพ์อยู่", "en": "Father is reading the newspaper", "words": [{"th": "พ่อ", "emoji": "👨", "en": "father"}, {"th": "กำลัง", "emoji": "⏱️", "en": "-ing"}, {"th": "อ่าน", "emoji": "👓", "en": "read"}, {"th": "หนังสือพิมพ์", "emoji": "📰", "en": "newspaper"}, {"th": "อยู่", "emoji": "📍", "en": "be at"}]},
     {"id": "L5-082", "n": 5, "th": "นกกำลังสร้างรังใหม่", "en": "The bird is building a new nest", "words": [{"th": "นก", "emoji": "🐦", "en": "bird"}, {"th": "กำลัง", "emoji": "⏱️", "en": "-ing"}, {"th": "สร้าง", "emoji": "🏗️", "en": "build"}, {"th": "รัง", "emoji": "🪹", "en": "nest"}, {"th": "ใหม่", "emoji": "🆕", "en": "new"}]}
   ]
-};
+}

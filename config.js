@@ -19,7 +19,7 @@ window.APP_CONFIG = {
      Apps Script ▸ Deploy ▸ Web app ▸ Execute as: Me ▸ Who has access: Anyone
      Paste the URL that ends in /exec (not /dev).
      ----------------------------------------------------------------------- */
-  endpoint : 'https://script.google.com/macros/s/AKfycbx-ms2fnyijVnDhKK6szcUsfRce7HOivr0B_nOWGvxYiMa9q7NEdbe4lgJXt5FA1nhuYg/exec',
+  endpoint : '',
 
   /* Only if you set READ_KEY in apps_script_stats.gs. Note this is visible to
      anyone who views the page source — it deters casual access, nothing more. */
@@ -30,16 +30,17 @@ window.APP_CONFIG = {
 
   /* Satisfaction survey shown on the end screen. Paste a Google Form link
      (the "Send ▸ 🔗 link" URL). Leave '' and the button is hidden.
- 
+
      Tip: a Form can be pre-filled from the URL. Get a prefilled link via
      Google Forms ▸ ⋮ ▸ Get pre-filled link, then paste the entry.xxxxx id
      below and the game will pass the player's name through automatically,
      so the patient does not have to type it twice.                        */
   survey: {
-    url        : 'https://docs.google.com/forms/d/e/1FAIpQLSdYeMV0lco5eTKzyoFMo3QPdYY_7hZpexlrsSOqvP8JWgBegA/viewform',     // e.g. 'https://docs.google.com/forms/d/e/XXXX/viewform'
-    nameField  : 'entry.1022541388',     // e.g. 'entry.1234567890'  (optional)
-    sidField   : 'entry.1333325407'      // e.g. 'entry.0987654321'  (optional, links the form to the session)
+    url        : '',     // e.g. 'https://docs.google.com/forms/d/e/XXXX/viewform'
+    nameField  : '',     // e.g. 'entry.1234567890'  (optional)
+    sidField   : ''      // e.g. 'entry.0987654321'  (optional, links the form to the session)
   },
+
 
   /* -----------------------------------------------------------------------
      2. GAME
@@ -50,13 +51,46 @@ window.APP_CONFIG = {
     questionsPerStage : 5,
     questionOptions   : [1, 2, 3, 5, 8, 10],
 
-    pointsPerQuestion : 100,
+    /* ---- scoring ----------------------------------------------------
+       A question is worth more when it has more words. Points are taken
+       off THIS question's value, never off the running total, so the
+       score the patient sees never goes down.                          */
+    pointsByLength : { 3: 60, 4: 80, 5: 100 },
+    pointsPerQuestion : 100,          // fallback for lengths not listed above
+
+    /* Each wrong submission costs this many points from the question,
+       but never below floorPct of its starting value.                  */
+    wrongWordPenalty : 10,            // per misplaced word, per submission
+    floorPct         : 0.4,           // 40% of the question value
+
+    /* Bonus for consecutive first-try correct answers. A wrong answer
+       PAUSES the streak (count is kept) rather than resetting it.       */
+    streakBonus  : 25,
+    streakLength : 3,
+
+    /* Show the running score to the patient while playing?
+       Some therapists hide it to reduce performance anxiety; the total
+       is always shown on the summary screen either way.                */
+    showScore : true,
+
+    /* How a question is submitted once every slot is filled.
+         'countdown' – short delay with a cancel ring (no extra reaching)
+         'button'    – an explicit ตรวจคำตอบ button the patient must press
+         'instant'   – check immediately, as the game did before          */
+    submitMode    : 'countdown',
+    submitDelayMs : 4000,
 
     /* Pre-selected values on the player form.
        side:    'left' | 'right' | 'both' | ''   ('' = force a choice)
        posture: 'sit'  | 'stand' | 'wheelchair' | ''                     */
     defaultSide    : 'both',
     defaultPosture : 'sit',
+
+    /* Show the full Thai sentence as the prompt at the start of each question?
+       false (default) = concealed. The patient must work out the correct word
+       order from the cards alone, which adds a working-memory and syntax task.
+       The sentence is always revealed once the answer is correct.           */
+    revealSentence : false,
 
     /* Camera framing on first run: 'fill' (height-fill, sides cropped —
        best for a 4:3 webcam on a wide screen), 'contain', or 'cover'.       */
@@ -67,6 +101,10 @@ window.APP_CONFIG = {
 
     /* Show the English meaning for this long when เฉลย / H is pressed. */
     hintMs : 2500,
+
+    /* Score multiplier for a question where the reveal button was used.
+       0.5 = half marks · 1 = no penalty · 0 = no score for that question. */
+    hintScoreFactor : 0.5,
   },
 
 

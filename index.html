@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<title>Thai Words Hand Exercise Game · เกมบริหารมือเรียงคำภาษาไทย</title>
+<title>NU Word Grasping Game · เกมบริหารมือเรียงคำภาษาไทย</title>
 
 <script src="https://cdn.tailwindcss.com"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -40,6 +40,17 @@
   @keyframes fade{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
   @media (prefers-reduced-motion: reduce){.fade-in{animation:none}}
   .hidden{display:none!important}
+  /* logo plate on the start screen */
+  .logobar{
+    display:flex; align-items:center; justify-content:center; gap:clamp(10px,3vw,20px);
+    background:rgba(255,255,255,.94); border-radius:16px;
+    padding:clamp(10px,2.2vw,16px) clamp(14px,3vw,22px);
+    margin:0 auto 18px; width:fit-content; max-width:100%;
+    box-shadow:0 8px 24px rgba(0,0,0,.32), inset 0 1px 0 rgba(255,255,255,.9);
+  }
+  .logo-seal{ height:clamp(52px,11vw,72px); width:auto; display:block }
+  .logo-36{   height:clamp(30px,6.4vw,42px); width:auto; display:block }
+  .logo-div{  width:1px; align-self:stretch; background:rgba(22,32,43,.16); margin:2px 0 }
   /* native <option> popups render with the OS background (white); without this
      the white inherited text is invisible. color-scheme flips the popup dark. */
   select, textarea, input{ color-scheme: dark; color:#fff; }
@@ -64,8 +75,14 @@
 <!-- ===== Start screen ===== -->
 <div id="startScreen" class="layer flex items-center justify-center px-5" style="pointer-events:auto">
   <div class="glass rounded-3xl max-w-lg w-full p-8 text-center fade-in">
-    <div class="text-6xl mb-3">🇹🇭 ✋</div>
-    <h1 class="text-3xl md:text-4xl font-bold tracking-tight leading-tight">Thai Words<br class="sm:hidden"> Hand Exercise Game</h1>
+    <!-- Logos sit on a light plate: both artworks have black outlines and grey
+         text, which would disappear against the dark glass panel. -->
+    <div class="logobar">
+      <img src="images/nu-logo.png" alt="ตราสัญลักษณ์มหาวิทยาลัยนเรศวร" class="logo-seal" />
+      <span class="logo-div"></span>
+      <img src="images/nu-36.png" alt="วาระครบรอบ 36 ปี มหาวิทยาลัยนเรศวร" class="logo-36" />
+    </div>
+    <h1 class="text-3xl md:text-4xl font-bold tracking-tight leading-tight">NU Word Grasping Game</h1>
     <h2 class="mt-1.5 text-xl md:text-2xl font-semibold text-emerald-300 tracking-tight">เกมบริหารมือเรียงคำภาษาไทย</h2>
     <p class="mt-3 text-sm text-white/70">โดย รัฐภูมิ วรานุสาสน์</p>
     <div class="mt-5 mb-1 mx-auto h-px w-24 bg-white/25"></div>
@@ -148,6 +165,17 @@
       </div>
     </div>
 
+    <label class="mt-4 flex items-start gap-3 rounded-xl bg-white/10 border border-white/25 px-4 py-3 cursor-pointer hover:bg-white/15 transition">
+      <input type="checkbox" id="fReveal" class="mt-0.5 w-5 h-5 accent-emerald-400 flex-none" />
+      <span class="text-sm leading-relaxed">
+        <b>แสดงประโยคเฉลยตั้งแต่เริ่มข้อ</b><br>
+        <span class="text-white/60 text-xs">
+          ไม่ติ๊ก (ค่าเริ่มต้น) = ซ่อนประโยค ผู้ป่วยต้องคิดลำดับคำเอง ได้ฝึกด้านการรู้คิดมากขึ้น ·
+          ประโยคจะแสดงเมื่อเรียงถูกเสมอ
+        </span>
+      </span>
+    </label>
+
     <label class="block mt-4 text-sm font-semibold">รายละเอียด (ไม่บังคับ)</label>
     <textarea id="fNote" rows="2" maxlength="200"
       class="mt-1 w-full rounded-xl bg-white/10 border border-white/30 px-4 py-3 placeholder-white/40 focus:outline-none focus:border-emerald-300"
@@ -222,6 +250,44 @@ function setQuestionsPerStage(q){
   G.totalRounds = STAGES.reduce((a,st)=>a+st.questions, 0);
 }
 const POINTS_PER_QUESTION = CF('game.pointsPerQuestion', 100);
+
+/* =========================================================================
+   SCORING
+   Points come off the CURRENT QUESTION's value, never off the running total,
+   so the number the patient watches only ever goes up. A misplaced card may
+   be a motor slip rather than a wrong answer, so penalties attach to a
+   deliberate submission, never to an individual drop.
+   ========================================================================= */
+const SCORE = {
+  streak : 0,          // consecutive first-try correct
+  bonuses: 0,
+  base(n){ return CF('game.pointsByLength', {})[n] || CF('game.pointsPerQuestion', 100); },
+  floor(n){ return Math.round(this.base(n) * CF('game.floorPct', 0.4)); },
+
+  /* value of the question right now, given the errors so far */
+  value(n, misplaced, hinted){
+    const pen = misplaced * CF('game.wrongWordPenalty', 10);
+    let v = Math.max(this.floor(n), this.base(n) - pen);
+    if (hinted) v = Math.round(v * CF('game.hintScoreFactor', 0.5));
+    return Math.max(1, v);
+  },
+
+  /* called once, when the answer is finally correct */
+  award(n, misplaced, hinted, firstTry){
+    const pts = this.value(n, misplaced, hinted);
+    let bonus = 0;
+    if (firstTry && !hinted){
+      this.streak++;
+      const need = CF('game.streakLength', 3);
+      if (need > 0 && this.streak % need === 0){
+        bonus = CF('game.streakBonus', 25); this.bonuses += bonus;
+      }
+    }
+    // a wrong answer PAUSES the streak: the count is kept, not reset
+    return { pts, bonus, total: pts + bonus, streak: this.streak };
+  },
+  reset(){ this.streak = 0; this.bonuses = 0; }
+};
 const MAX_WORDS  = Math.max(...STAGES.map(s=>s.n));
 
 /* Kept inline so index.html still runs on its own if the bank file is absent */
@@ -292,6 +358,10 @@ const G = {
   lockedUntil : 0,
   hintUntil   : 0,
   hoverSince  : 0,
+  lastGain    : null,
+  lastBonus   : 0,
+  commit      : null,
+  lastHinted  : false,
   endHold     : 0,
   particles   : [],
   seed   : 1013,
@@ -671,6 +741,8 @@ function buildLevel(idx){
   // deal outward from the centre row — settles in ~0.3 s
   G.cards.forEach(c=>{ c.x = G.W/2; c.y = G.slots[0].y; c.pop = 1; });
   STATS.startRound();
+  G.commit = null;
+  syncHintLabel();          // reset the −50% label for the new question
 }
 
 function cardInSlot(i){ return G.cards.find(c=>c.slot===i) || null; }
@@ -693,25 +765,70 @@ function syncTargets(){
   });
 }
 
+/* Every slot is full — arm the commit, don't judge yet. Pulling a card back
+   out cancels it, so exploring the last slot is never punished.            */
+function armSubmit(){
+  if (G.cards.some(c=>c.slot===null)) { G.commit = null; return; }
+  if (G.commit || G.screen!=='play') return;
+  const mode = CF('game.submitMode','countdown');
+  if (mode === 'instant') return checkAnswer();
+  G.commit = { t0: performance.now(), ms: CF('game.submitDelayMs',4000), mode };
+}
+function cancelSubmit(){ G.commit = null; }
+
+function tickSubmit(now){
+  const c = G.commit; if (!c) return;
+  if (G.cards.some(x=>x.slot===null)){ G.commit = null; return; }   // card pulled out
+  if (c.mode === 'countdown' && now - c.t0 >= c.ms){ G.commit = null; checkAnswer(); }
+}
+
 function checkAnswer(){
   if (G.cards.some(c=>c.slot===null)) return;
+  G.commit = null;
+  const lv = G.playlist[G.level];
+  const n  = lv ? (lv.n || lv.words.length) : G.slots.length;
   const ok = G.slots.every((s,i)=>{ const c = cardInSlot(i); return c && c.wi === i; });
-  if (STATS.round){
-    STATS.round.attempts++;
-    if (!ok) STATS.round.misplaced += G.cards.filter(c=>c.wi !== c.slot).length;
+  const wrongCards = G.cards.filter(c=>c.wi !== c.slot).length;
+  const firstTry = !(STATS.round && STATS.round.attempts);
+
+  /* The first submission is the clean cognitive measure: how many words the
+     patient placed correctly before any feedback. Later attempts are partly
+     trial-and-error, so they are counted separately.                       */
+  if (firstTry && STATS.round){
+    STATS.round.correctFirst = n - wrongCards;
+    STATS.round.wrongFirst   = wrongCards;
   }
 
+  if (STATS.round){
+    STATS.round.attempts++;
+    if (!ok) STATS.round.misplaced += wrongCards;
+  }
+  const misplaced = STATS.round ? STATS.round.misplaced : 0;
+  const hinted = !!(STATS.round && STATS.round.hint);
+
   if (ok){
-    G.score += POINTS_PER_QUESTION;
+    const a = SCORE.award(n, misplaced, hinted, firstTry);
+    G.score += a.total;
     G.solved++;
+    G.lastGain = a.pts; G.lastBonus = a.bonus; G.lastHinted = hinted;
     G.screen = 'win';
     const cur  = G.playlist[G.level];
     const last = cur.q === STAGES[cur.stage].questions - 1;   // stage cleared?
     G.banner = {
       text: last ? `ผ่านด่าน ${cur.stage+1}!` : 'เก่งมาก!',
       sub : cur.words.map(w=>w.th).join('  '),                // spaced = the segmentation
+      full: cur.th || '',
+      en  : cur.en || '',
+      gain: a.pts, bonus: a.bonus, hinted, streak: a.streak,
       t   : performance.now()
     };
+    // session tallies: stages cleared, hardest level passed, word accuracy
+    const T = STATS.tally;
+    if (last) T.stages++;
+    T.maxWords  = Math.max(T.maxWords, n);
+    T.wordsOk   += (STATS.round ? (STATS.round.correctFirst ?? n) : n);
+    T.wordsWrong+= (STATS.round ? (STATS.round.wrongFirst ?? 0) : 0);
+
     STATS.logRound(cur, true);
     burst();
     setTimeout(()=>{
@@ -832,6 +949,16 @@ const TUT_BTN = ()=> tutLayout().btn;
 /* Anything the hand must touch has to sit inside the camera rectangle —
    outside it the webcam simply cannot see the hand, so a button in the
    letterbox bar is unreachable by hand even though the mouse can click it. */
+/* Commit control sits just under the centred slot row, so the patient's hand
+   is already there — no extra travel to a far corner.                      */
+function commitRect(){
+  const w = Math.min(230*G.s, G.W*0.5), h = 62*G.s;
+  const r = reachRect();
+  let y = G.H*0.5 + G.cardH*0.62 + h*0.72;
+  y = Math.min(y, r.y + r.h - h/2 - 12*G.s);
+  return { x:G.W/2, y, w, h };
+}
+
 function endBtnRect(){
   const r = reachRect();
   const w = Math.min(184*G.s, r.w*0.36), h = 54*G.s;
@@ -903,7 +1030,7 @@ function update(now, dt){
       const slotIdx = (best && bd < G.cardW*0.85) ? best.i : -1;
       MV.end(c, slotIdx, now);
       place(c, slotIdx>=0 ? slotIdx : null);
-      checkAnswer();
+      armSubmit();
     }
 
     const r = STATS.round;
@@ -912,6 +1039,15 @@ function update(now, dt){
       r.fpsSum += G.fps; r.fpsN++; if (G.fps < r.fpsMin) r.fpsMin = G.fps;
     }
     if (G.held) MV.sample(now, dt);
+
+    // commit control: pinch it to submit immediately (countdown or button mode)
+    tickSubmit(now);
+    if (G.commit && !G.held){
+      const cb = commitRect();
+      const over = Math.abs(P.x-cb.x)<cb.w*0.6 && Math.abs(P.y-cb.y)<cb.h*0.85;
+      G.commitHover = over;
+      if (over && wantsGrab()){ P.needRelease = true; G.commit = null; checkAnswer(); }
+    } else G.commitHover = false;
     if (STATS.session && STATS.session.fps.length < 4000) STATS.session.fps.push(+G.fps.toFixed(1));
 
     // จบเกม — dwell to confirm so a stray pinch cannot end the session
@@ -1145,13 +1281,48 @@ function drawHUD(now){
     ctx.fill();
   }
 
-  // score chip
+  // score chip — hidden when the therapist prefers no live score
+  const showScore = CF('game.showScore', true);
   if (L.chip){
     const c = L.chip;
     glassPanel(c.x, c.y, c.w, c.h, 18*G.s);
-    textFit(`คะแนน · ${G.solved}/${G.totalRounds} ข้อ`,
-         c.x+c.w/2, c.y+c.h*0.26, 14*G.s, c.w-20*G.s, '600', 'rgba(255,255,255,.68)');
-    textFit(String(G.score), c.x+c.w/2, c.y+c.h*0.66, c.h*0.62, c.w-22*G.s, '700', '#fcd34d');
+    if (showScore){
+      textFit(`คะแนน · ${G.solved}/${G.totalRounds} ข้อ`,
+           c.x+c.w/2, c.y+c.h*0.26, 14*G.s, c.w-20*G.s, '600', 'rgba(255,255,255,.68)');
+      textFit(String(G.score), c.x+c.w/2, c.y+c.h*0.66, c.h*0.62, c.w-22*G.s, '700', '#fcd34d');
+    } else {
+      textFit('ทำไปแล้ว', c.x+c.w/2, c.y+c.h*0.26, 14*G.s, c.w-20*G.s, '600', 'rgba(255,255,255,.68)');
+      textFit(`${G.solved}/${G.totalRounds}`, c.x+c.w/2, c.y+c.h*0.66, c.h*0.55, c.w-22*G.s, '700', '#fcd34d');
+    }
+  }
+
+  /* value of THIS question, counting down as mistakes accumulate. The running
+     total never falls, so only the question's worth is at stake.            */
+  if (showScore && (G.screen==='play' || G.screen==='win')){
+    const n = lv.n || lv.words.length;
+    const misplaced = STATS.round ? STATS.round.misplaced : 0;
+    const hinted = !!(STATS.round && STATS.round.hint);
+    const val = SCORE.value(n, misplaced, hinted);
+    const full = SCORE.base(n);
+    const atFloor = val <= SCORE.floor(n) * (hinted ? CF('game.hintScoreFactor',0.5) : 1) + 0.5;
+    const cw = 168*G.s, ch = 54*G.s, cx = G.W - cw - 20*G.s, cy = L.py;
+    glassPanel(cx, cy, cw, ch, 16*G.s);
+    text('ข้อนี้', cx+cw/2, cy+ch*0.28, 12.5*G.s, '600', 'rgba(255,255,255,.65)');
+    const col = val===full ? '#4ade80' : atFloor ? '#f87171' : '#fbbf24';
+    text(`${val}${val<full?` / ${full}`:''}`, cx+cw/2, cy+ch*0.68, 21*G.s, '700', col);
+
+    // streak flame
+    if (SCORE.streak > 0){
+      const need = CF('game.streakLength',3), into = SCORE.streak % need;
+      const sy = cy + ch + 16*G.s;
+      text(`🔥 ${SCORE.streak}`, cx+cw-24*G.s, sy, 15*G.s, '700', '#fb923c');
+      for (let i=0;i<need;i++){
+        ctx.beginPath();
+        ctx.arc(cx+16*G.s+i*14*G.s, sy, 4*G.s, 0, 7);
+        ctx.fillStyle = i < (into===0?need:into) ? '#fb923c' : 'rgba(255,255,255,.22)';
+        ctx.fill();
+      }
+    }
   }
 }
 
@@ -1263,13 +1434,57 @@ function drawBanner(now){
   if (!G.banner) return;
   const t=(now-G.banner.t)/1000, a=Math.min(1,t*3)*(t>1.7?Math.max(0,(2.1-t)/0.4):1);
   ctx.save(); ctx.globalAlpha=a;
-  const pw=Math.min(G.W-60, 520*G.s), ph=150*G.s, px=(G.W-pw)/2;
+  const pw=Math.min(G.W-60, 560*G.s), ph=178*G.s, px=(G.W-pw)/2;
   const py=Math.min(G.H-ph-90*G.s, G.H*0.5 + G.cardH*0.62 + 16*G.s);  // just below the slots
   glassPanel(px,py,pw,ph,26*G.s);
   const pop = 1+Math.sin(Math.min(t,0.5)*Math.PI)*0.12;
-  ctx.save(); ctx.translate(G.W/2, py+ph*0.40); ctx.scale(pop,pop);
-  text(G.banner.text, 0,0, 46*G.s, '700', '#4ade80'); ctx.restore();
-  text(G.banner.sub, G.W/2, py+ph*0.76, 22*G.s, '600', '#fff');
+  ctx.save(); ctx.translate(G.W/2, py+ph*0.36); ctx.scale(pop,pop);
+  text(G.banner.text, 0,0, 42*G.s, '700', '#4ade80'); ctx.restore();
+  textFit(G.banner.sub, G.W/2, py+ph*0.68, 22*G.s, pw-40*G.s, '600', '#fff');
+  if (G.banner.en)
+    textFit(G.banner.en, G.W/2, py+ph*0.86, 15*G.s, pw-40*G.s, '600', 'rgba(255,255,255,.62)');
+  if (G.banner.gain != null && CF('game.showScore', true)){
+    const tag = G.banner.hinted ? ' (ใช้เฉลย)' : '';
+    text(`+${G.banner.gain}${tag}`, G.W/2, py+ph*1.04, 17*G.s, '700',
+         G.banner.hinted ? '#fbbf24' : '#4ade80');
+    if (G.banner.bonus)
+      text(`🔥 ต่อเนื่อง ${G.banner.streak} ข้อ · โบนัส +${G.banner.bonus}`,
+           G.W/2, py+ph*1.20, 15*G.s, '700', '#fb923c');
+  }
+  ctx.restore();
+}
+
+function drawCommit(now){
+  const c = G.commit; if (!c) return;
+  const b = commitRect();
+  const p = c.mode==='countdown' ? Math.min(1,(now-c.t0)/c.ms) : 0;
+  const on = G.commitHover;
+
+  ctx.save();
+  ctx.translate(b.x, b.y);
+  ctx.shadowColor='rgba(16,185,129,.45)'; ctx.shadowBlur=(22+(on?20:0))*G.s; ctx.shadowOffsetY=6*G.s;
+  const g=ctx.createLinearGradient(0,-b.h/2,0,b.h/2);
+  g.addColorStop(0,'rgba(255,255,255,.20)'); g.addColorStop(1,'rgba(255,255,255,.08)');
+  ctx.fillStyle=g; rr(-b.w/2,-b.h/2,b.w,b.h,b.h/2); ctx.fill();
+  ctx.shadowColor='transparent';
+
+  // countdown sweeps left→right inside the pill
+  if (c.mode==='countdown'){
+    ctx.save(); rr(-b.w/2,-b.h/2,b.w,b.h,b.h/2); ctx.clip();
+    ctx.fillStyle='rgba(52,211,153,.55)';
+    ctx.fillRect(-b.w/2,-b.h/2, b.w*p, b.h);
+    ctx.restore();
+  }
+  ctx.strokeStyle = on ? 'rgba(255,255,255,.95)' : 'rgba(52,211,153,.85)';
+  ctx.lineWidth = (on?3:2)*G.s; rr(-b.w/2,-b.h/2,b.w,b.h,b.h/2); ctx.stroke();
+
+  if (c.mode==='countdown'){
+    text('กำลังตรวจคำตอบ…', 0, -8*G.s, 17*G.s, '700', '#fff');
+    text('ดึงการ์ดออกเพื่อแก้ไข · จีบนิ้วเพื่อส่งเลย', 0, 13*G.s, 10.5*G.s, '600', 'rgba(255,255,255,.75)');
+  } else {
+    text('✓ ตรวจคำตอบ', 0, -6*G.s, 19*G.s, '700', '#fff');
+    text('จีบนิ้วที่ปุ่มนี้', 0, 15*G.s, 10.5*G.s, '600', 'rgba(255,255,255,.7)');
+  }
   ctx.restore();
 }
 
@@ -1341,6 +1556,7 @@ function loop(now){
       drawHUD(now);
       drawSlots();
       G.cards.forEach(c=>drawCard(c,now));
+      drawCommit(now);
       drawParticles();
       drawBanner(now);
       drawEndButton(now);
@@ -1374,10 +1590,11 @@ const STAT_COLS = [
   'sent_id','sent_th','n_words','card_th','grasp',
   'plan_ms','solve_ms','move_ms','grasp_ms',
   'path_pct','dist_pct','path_ratio','peak_vel','ttp_pct','submoves','drop_err_pct','to_slot',
-  'attempts','misplaced','pickups','fail_grasp','hint_used','completed',
+  'attempts','misplaced','correct_first','wrong_first','pct_first','pickups','fail_grasp','hint_used','completed',
   'ap_max','ap_min','ap_exc','close_ms','release_ms','hold_sd','palm_face','cycles','cycle_ms',
   'grip_close_th','grip_open_th',
-  'score','rounds_done','rounds_total','q_per_level','duration_ms','no_hand_ms','ended_early','end_reason',
+  'reveal','q_points','q_max','streak','bonus','score','rounds_done','rounds_total','q_per_level',
+  'stages_cleared','max_words','words_ok','words_wrong','duration_ms','no_hand_ms','ended_early','end_reason',
   'input','fps_mean','fps_min','screen','ua','app','bank'
 ];
 
@@ -1395,7 +1612,7 @@ const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2,8
    "somchai" and "Somchai" do not become three different patients          */
 const playerKey = n => (n||'').trim().replace(/\s+/g,' ').toLowerCase();
 
-const PLAYER = { key:'', name:'', note:'', side:'', posture:'' };
+const PLAYER = { key:'', name:'', note:'', side:'', posture:'', reveal:false };
 
 function knownNames(){ return readRows(STATS.NKEY); }
 function rememberName(n){
@@ -1408,12 +1625,13 @@ function rememberName(n){
 /* ---- session ---------------------------------------------------------- */
 STATS.start = function(){
   this.session = { sid:uid(), t0:performance.now(), started:new Date().toISOString(), fps:[] };
+  this.tally = { stages:0, maxWords:0, wordsOk:0, wordsWrong:0 };
 };
 STATS.base = function(){
   const s = this.session || {sid:''};
   return { ts:new Date().toISOString(), sid:s.sid,
     player_key:PLAYER.key, display_name:PLAYER.name, note:PLAYER.note,
-    side:PLAYER.side, posture:PLAYER.posture,
+    side:PLAYER.side, posture:PLAYER.posture, reveal:PLAYER.reveal ? 1 : 0,
     screen:`${G.W}x${G.H}`, ua:navigator.userAgent.slice(0,110),
     app:APP_VERSION, bank:(window.THAI_BANK && window.THAI_BANK.version) || 0 };
 };
@@ -1425,8 +1643,12 @@ STATS.push = function(row){
 };
 
 /* ---- round ------------------------------------------------------------ */
+/* running totals for the session summary the OT asked for */
+STATS.tally = { stages:0, maxWords:0, wordsOk:0, wordsWrong:0 };
+
 STATS.startRound = function(){
   this.round = { t0:performance.now(), firstPick:0, pickups:0, attempts:0, misplaced:0,
+                 correctFirst:null, wrongFirst:null,
                  failGrasp:0, hint:0, hand:0, mouse:0, noHand:0, mv:0,
                  fpsSum:0, fpsN:0, fpsMin:999 };
 };
@@ -1437,8 +1659,14 @@ STATS.logRound = function(lv, completed){
     sent_id:lv.id||'', sent_th:lv.th||'', n_words:lv.n||lv.words.length,
     plan_ms: r.firstPick ? Math.round(r.firstPick-r.t0) : '',
     solve_ms: Math.round(performance.now()-r.t0),
-    attempts:r.attempts, misplaced:r.misplaced, pickups:r.pickups,
+    attempts:r.attempts, misplaced:r.misplaced,
+    correct_first: r.correctFirst ?? '', wrong_first: r.wrongFirst ?? '',
+    pct_first: (r.correctFirst != null && (lv.n||lv.words.length))
+               ? +(r.correctFirst / (lv.n||lv.words.length) * 100).toFixed(1) : '',
+    pickups:r.pickups,
     fail_grasp:r.failGrasp, hint_used:r.hint, completed: completed?1:0,
+    q_points: completed ? (G.lastGain ?? '') : '', q_max: SCORE.base(lv.n||lv.words.length),
+    streak: completed ? SCORE.streak : '', bonus: completed ? (G.lastBonus||0) : '',
     input: r.hand>r.mouse ? 'hand':'mouse', no_hand_ms:Math.round(r.noHand),
     fps_mean: r.fpsN ? +(r.fpsSum/r.fpsN).toFixed(1) : '',
     fps_min : r.fpsMin<999 ? +r.fpsMin.toFixed(1) : ''
@@ -1462,6 +1690,9 @@ STATS.endSession = function(reason){
     type:'session', score:G.score, rounds_done:G.solved, rounds_total:G.totalRounds, q_per_level:G.qPerStage,
     duration_ms:Math.round(performance.now()-s.t0),
     ended_early: reason==='finished' ? 0 : 1, end_reason:reason||'',
+    bonus:SCORE.bonuses,
+    stages_cleared:this.tally.stages, max_words:this.tally.maxWords,
+    words_ok:this.tally.wordsOk, words_wrong:this.tally.wordsWrong,
     grip_close_th:GRIP_CLOSE, grip_open_th:GRIP_OPEN,
     fps_mean: fps.length ? +(fps.reduce((a,b)=>a+b,0)/fps.length).toFixed(1) : '',
     fps_min : fps.length ? +Math.min.apply(null,fps).toFixed(1) : ''
@@ -1764,8 +1995,10 @@ document.getElementById('btnBackStart').addEventListener('click', ()=>showScreen
 /* form defaults from config.js (side / posture / questions per stage) */
 function applyFormDefaults(){
   const side = document.getElementById('fSide'), pose = document.getElementById('fPose');
+  const rev  = document.getElementById('fReveal');
   if (side) side.value = CF('game.defaultSide', 'both');
   if (pose) pose.value = CF('game.defaultPosture', 'sit');
+  if (rev)  rev.checked = !!CF('game.revealSentence', false);
 }
 
 /* questions-per-stage choices come from config.js */
@@ -1804,7 +2037,9 @@ document.getElementById('btnForm').addEventListener('click', ()=>{
   PLAYER.side    = document.getElementById('fSide').value;
   PLAYER.posture = document.getElementById('fPose').value;
   setQuestionsPerStage(document.getElementById('fQ').value);
+  PLAYER.reveal = document.getElementById('fReveal').checked;
   rememberName(name);
+  syncHintLabel();
   STATS.start();                                  // session opens here
   if (G.aiState === 'unavailable' || !CF('pinchCheck.enabled', true)){
     G.screen = 'tutorial'; showScreen('tutorial');
@@ -1816,8 +2051,10 @@ document.getElementById('btnSkipPinch').addEventListener('click', ()=>PC.finish(
 
 /* --- start a run (called from the tutorial button) --- */
 function startRun(){
+  syncHintLabel();
   G.screen='play'; G.level=0; G.score=0; G.solved=0; G.endHold=0;
   if (!STATS.session) STATS.start();
+  SCORE.reset();
   buildPlaylist(); buildLevel(0);
   showScreen('game');
 }
@@ -1917,8 +2154,21 @@ document.getElementById('syncChip').addEventListener('click', ()=>{
   STATS.flush(true); updateSyncChip();
 });
 
-function showHint(){ G.hintUntil = performance.now()+CF('game.hintMs',2500); if (STATS.round) STATS.round.hint++; }
+function showHint(){
+  G.hintUntil = performance.now()+CF('game.hintMs',2500);
+  if (STATS.round) STATS.round.hint++;
+  syncHintLabel();
+}
 document.getElementById('btnHint').addEventListener('click', ()=>showHint());
+/* label reflects what the button will actually do */
+function syncHintLabel(){
+  const b = document.getElementById('btnHint'); if (!b) return;
+  const used = !!(STATS.round && STATS.round.hint);
+  const base = PLAYER.reveal ? 'ความหมาย (H)' : 'เฉลย (H)';
+  const pen  = Math.round((1 - CF('game.hintScoreFactor',0.5)) * 100);
+  b.textContent = used ? base + ' ✓' : (PLAYER.reveal ? base : `${base} −${pen}%`);
+  b.title = PLAYER.reveal ? '' : `ใช้เฉลยแล้วข้อนี้จะได้คะแนนลดลง ${pen}%`;
+}
 window.addEventListener('keydown', e=>{
   if (e.key==='h'||e.key==='H') showHint();
   if (e.key==='Escape') endGame('early');

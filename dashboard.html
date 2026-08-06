@@ -261,6 +261,7 @@ function buildSessions(all){
       done: num(s && s.rounds_done) ?? g.rounds.filter(r=>String(r.completed)==='1').length,
       total: num(s && s.rounds_total) ?? null,
       qPerLevel: num(s && s.q_per_level),
+      reveal: String((s && s.reveal) ?? (head && head.reveal) ?? '') === '1',
       durationMs: num(s && s.duration_ms) ?? 0,
       endedEarly: String(s && s.ended_early) === '1',
       endReason: (s && s.end_reason) || (s ? '' : 'no-session-row'),
@@ -294,6 +295,16 @@ function buildSessions(all){
       solveMs: med(pick(handRounds,'solve_ms')),
 
       // ---- effort / errors
+      stagesCleared: num(s && s.stages_cleared),
+      maxWords: num(s && s.max_words),
+      wordsOk: num(s && s.words_ok),
+      wordsWrong: num(s && s.words_wrong),
+      pctFirst: med(pick(handRounds,'pct_first')),
+      firstTry: handRounds.length
+        ? handRounds.filter(r=>num(r.attempts)===1).length/handRounds.length*100 : null,
+      efficiency: (()=>{ const p=pick(handRounds,'q_points'), m=pick(handRounds,'q_max');
+        return (p.length && m.length) ? p.reduce((a,b)=>a+b,0)/m.reduce((a,b)=>a+b,0)*100 : null; })(),
+      misplacedPerQ: avg(pick(handRounds,'misplaced')),
       failGrasp: avg(pick(handRounds,'fail_grasp')),
       attempts : avg(pick(handRounds,'attempts')),
       hints    : pick(g.rounds,'hint_used').reduce((a,b)=>a+b,0),
@@ -599,7 +610,7 @@ function barChart(items, opts={}){
    pipeline (gates, aggregation, charts) is exercised without a backend.
    =========================================================================== */
 function demoRows(){
-  const COLS=['type','ts','sid','player_key','display_name','note','side','posture','round','stage','q','mv','sent_id','sent_th','n_words','card_th','grasp','plan_ms','solve_ms','move_ms','grasp_ms','path_pct','dist_pct','path_ratio','peak_vel','ttp_pct','submoves','drop_err_pct','to_slot','attempts','misplaced','pickups','fail_grasp','hint_used','completed','ap_max','ap_min','ap_exc','close_ms','release_ms','hold_sd','palm_face','cycles','cycle_ms','grip_close_th','grip_open_th','score','rounds_done','rounds_total','q_per_level','duration_ms','no_hand_ms','ended_early','end_reason','input','fps_mean','fps_min','screen','ua','app','bank'];
+  const COLS=['type','ts','sid','player_key','display_name','note','side','posture','round','stage','q','mv','sent_id','sent_th','n_words','card_th','grasp','plan_ms','solve_ms','move_ms','grasp_ms','path_pct','dist_pct','path_ratio','peak_vel','ttp_pct','submoves','drop_err_pct','to_slot','attempts','misplaced','correct_first','wrong_first','pct_first','pickups','fail_grasp','hint_used','completed','ap_max','ap_min','ap_exc','close_ms','release_ms','hold_sd','palm_face','cycles','cycle_ms','grip_close_th','grip_open_th','reveal','q_points','q_max','streak','bonus','score','rounds_done','rounds_total','q_per_level','stages_cleared','max_words','words_ok','words_wrong','duration_ms','no_hand_ms','ended_early','end_reason','input','fps_mean','fps_min','screen','ua','app','bank'];
   let seed=7; const rnd=()=>((seed=seed*16807%2147483647)-1)/2147483646;
   const rows=[]; const push=o=>rows.push(COLS.map(c=>o[c]===undefined?'':o[c]));
   const WORDS=['ฉัน','กิน','ข้าว','แมว','ปลา','นก','บิน','บน','ท้องฟ้า','แม่','ทำ','อาหาร'];
@@ -633,6 +644,10 @@ function demoRows(){
           plan_ms:Math.round((2600+nw*320)*(1-prog*0.05)*(0.9+rnd()*0.2)),
           solve_ms:Math.round((5200+nw*720)*(1-prog*0.26)*fat),
           attempts:rnd()<(0.62+prog*0.18)?1:2, misplaced:rnd()<0.75?0:2, pickups:nw,
+          q_points:Math.round((nw*20)*(0.7+prog*0.25+rnd()*0.1)), q_max:nw*20,
+          correct_first:Math.max(0,nw-(rnd()<(0.62+prog*0.18)?0:2)),
+          wrong_first:(rnd()<(0.62+prog*0.18)?0:2),
+          pct_first:Math.round((0.62+prog*0.25+rnd()*0.13)*100),
           fail_grasp:Math.max(0,Math.round((1.2-prog*0.8)*rnd()*2)),
           hint_used:rnd()<0.12?1:0, completed:1, input:mouse?'mouse':'hand',
           no_hand_ms:Math.round(rnd()*2500), fps_mean:fps.toFixed(1), fps_min:(fps-5).toFixed(1)}));
@@ -656,7 +671,11 @@ function demoRows(){
             palm_face: edge?0.28:(0.72+rnd()*0.18).toFixed(2)}));
         }
       }
-      push(Object.assign({},base,{type:'session',score:done*100,rounds_done:done,rounds_total:nR,
+      push(Object.assign({},base,{type:'session',score:Math.round(done*80*(0.7+prog*0.25)),
+        stages_cleared: done>=nR?3:Math.floor(done/5), max_words: done>10?5:done>5?4:3,
+        words_ok: Math.round(done*3.6*(0.7+prog*0.25)), words_wrong: Math.round(done*1.1*(1-prog*0.5)),
+        rounds_done:done,rounds_total:nR,
+        reveal: (p.k==='p-007'||(p.k==='p-001'&&s<4)) ? 1 : 0,
         q_per_level:5,duration_ms:done*62000+Math.round(rnd()*40000),
         ended_early:done<nR?1:0,end_reason:done<nR?'early':'finished',
         fps_mean:fps.toFixed(1),fps_min:(fps-5).toFixed(1),
@@ -791,15 +810,62 @@ function renderPatient(){
     <div><h2 style="font-size:20px">${esc(pname(p))}</h2>
       <div class="psub">${SIDE[p.side]??p.side} · ${POSE[p.posture]??p.posture} ·
         เริ่ม ${THDATE(p.sessions[0].ts)} · ${p.n} ครั้ง${p.nValid<p.n?` (ใช้คำนวณได้ ${p.nValid})`:''}</div>
-      ${p.last.note?`<div class="psub" style="margin-top:3px">📝 ${esc(p.last.note)}</div>`:''}</div>
+      ${p.last.note?`<div class="psub" style="margin-top:3px">📝 ${esc(p.last.note)}</div>`:''}
+      ${mixedModeNote(p)}</div>
     <div style="margin-left:auto;display:flex;gap:24px;flex-wrap:wrap">
       ${stat('การเคลื่อนไหวสะสม', p.totalMoves.toLocaleString())}
       ${stat('เวลาฝึกสะสม', Math.floor(p.totalMs/3600000)+' ชม. '+Math.round(p.totalMs%3600000/60000)+' น.')}
       ${stat('ความสม่ำเสมอ', p.perWeek.toFixed(1)+' <span style="font-size:12px;font-weight:400">ครั้ง/สัปดาห์</span>')}
     </div></div></div>
 
+  <div class="sectlabel">ผลลัพธ์ด้านการรู้คิด · Primary Outcome</div>
+  <div class="grid g4">
+    ${(()=>{const L=good.at(-1)||{};
+      const totOk=good.reduce((a,x)=>a+(x.wordsOk||0),0);
+      const totNo=good.reduce((a,x)=>a+(x.wordsWrong||0),0);
+      const acc = (totOk+totNo)? totOk/(totOk+totNo)*100 : null;
+      return [
+        miniTile('คะแนนรวมล่าสุด','score', L.score??'—'),
+        miniTile('คำที่เรียงถูก / ผิด','words_ok', `${totOk} / ${totNo}`),
+        miniTile('ความถูกต้องของคำ','pct_first', acc==null?'—':Math.round(acc)+'%','ครั้งแรก'),
+        miniTile('เวลาเฉลี่ยต่อข้อ','solve_ms', secs(med(good.map(x=>x.solveMs).filter(v=>v!=null)))+' วิ')
+      ].join('');})()}
+  </div>
+  <div class="grid g4" style="margin-top:15px">
+    ${miniTile('จำนวนครั้งที่เล่น','sessions', String(p.n))}
+    ${miniTile('ด่านที่ผ่าน (ล่าสุด)','stages_cleared',
+        (good.at(-1)?.stagesCleared ?? '—') + (good.at(-1)?.stagesCleared!=null?' / 3':''))}
+    ${miniTile('ระดับความยากที่ทำได้','max_words',
+        (()=>{const mw=Math.max(0,...good.map(x=>x.maxWords||0)); return mw?mw+' คำ':'—';})())}
+    ${miniTile('ตอบถูกตั้งแต่ครั้งแรก','attempts',
+        good.at(-1)?.firstTry==null?'—':Math.round(good.at(-1).firstTry)+'%')}
+  </div>
+
+  <div class="card" style="margin-top:15px"><header><h3>แนวโน้มผลด้านการรู้คิด</h3>
+    <span class="hint">ต่อครั้งที่เล่น</span></header>
+    <div class="body"><div class="grid g2" style="gap:20px">
+      <div><div class="psub" style="margin-bottom:6px">ความถูกต้องของคำ (ครั้งแรก) %</div>
+        ${barChart(good.filter(x=>x.pctFirst!=null).map((x,i)=>({a:x.pctFirst,label:'#'+(i+1)})),{ca:'#0F6E6E',h:170})}</div>
+      <div><div class="psub" style="margin-bottom:6px">เวลาเฉลี่ยต่อข้อ (วินาที)</div>
+        ${barChart(good.filter(x=>x.solveMs!=null).map((x,i)=>({a:x.solveMs/1000,label:'#'+(i+1)})),{ca:'#E8A33D',h:170})}</div>
+    </div></div></div>
+
   <div class="sectlabel">ตัวชี้วัดคุณภาพการเคลื่อนไหว · ทิศทางขึ้น = ดีขึ้นเสมอ</div>
   <div class="grid g4">${trend}</div>
+
+  <div class="sectlabel">ความแม่นยำในการเรียงคำ · ด้านการรู้คิด</div>
+  <div class="grid g2">
+    <div class="card"><header><h3>ตอบถูกตั้งแต่ครั้งแรก</h3><span class="hint">attempts = 1</span></header>
+      <div class="body">${barChart(good.filter(x=>x.firstTry!=null).map((x,i)=>({a:x.firstTry,label:'#'+(i+1)})),{ca:'#0F6E6E',h:180})}
+        <div style="font-size:12.5px;color:var(--ink-2);margin-top:10px">
+          ${(()=>{const v=good.map(x=>x.firstTry).filter(x=>x!=null);
+            return v.length? `ล่าสุด ${Math.round(v.at(-1))}% (เริ่มต้น ${Math.round(v[0])}%)`:'ยังไม่มีข้อมูล';})()}
+        </div></div></div>
+    <div class="card"><header><h3>คะแนนที่ได้เทียบกับคะแนนเต็ม</h3><span class="hint">q_points ÷ q_max</span></header>
+      <div class="body">${barChart(good.filter(x=>x.efficiency!=null).map((x,i)=>({a:x.efficiency,label:'#'+(i+1)})),{ca:'#E8A33D',h:180})}
+        <div style="font-size:12.5px;color:var(--ink-2);margin-top:10px">
+          รวมผลของการวางผิดและการใช้ปุ่มเฉลยไว้ในตัวเลขเดียว</div></div></div>
+  </div>
 
   <div class="sectlabel">การจับและการปล่อย</div>
   <div class="grid g32">
@@ -854,14 +920,16 @@ function renderPatient(){
   <div class="sectlabel">ประวัติการเล่น</div>
   <div class="card"><div class="body" style="padding:14px 2px 6px"><table>
     <thead><tr><th style="padding-left:14px">วันที่</th><th>ข้อที่ทำได้</th><th>เวลา</th>
-      <th>การเคลื่อนไหว</th><th>ความตรง</th><th>เวลาเอื้อม</th><th>คุณภาพข้อมูล</th></tr></thead>
+      <th>คะแนน</th><th>คำถูก/ผิด</th><th>ระดับ</th><th>โหมดโจทย์</th><th>เวลาเอื้อม</th><th>คุณภาพข้อมูล</th></tr></thead>
     <tbody>${p.sessions.slice().reverse().map(s=>`
       <tr class="click" data-sid="${esc(s.sid)}">
         <td style="padding-left:14px">${THDATE(s.ts)} <span class="psub">${THTIME(s.ts)}</span></td>
         <td class="mono">${s.done}${s.total?'/'+s.total:''} ${s.endedEarly?'<span class="tag t-down" style="margin-left:4px"><i></i>จบก่อน</span>':''}</td>
         <td class="mono">${mins(s.durationMs)} น.</td>
-        <td class="mono">${s.nMoves}</td>
-        <td class="mono">${n2(s.pathRatio)}</td>
+        <td class="mono">${s.score}</td>
+        <td class="mono">${s.wordsOk??'—'} / ${s.wordsWrong??'—'}</td>
+        <td class="mono">${s.maxWords?s.maxWords+' คำ':'—'}</td>
+        <td>${s.reveal?'แสดง':'ซ่อน'}</td>
         <td class="mono">${secs(s.moveMs)} วิ</td>
         <td>${s.valid?'<span class="quality">✓ ใช้ได้</span>':`<span class="quality bad">✕ ${s.lowFps?'fps ต่ำ':s.mouseRounds?'ใช้เมาส์':'ข้อมูลน้อย'}</span>`}</td>
       </tr>`).join('')}</tbody></table></div></div>`;
@@ -871,6 +939,19 @@ function renderPatient(){
     renderSession(); go('session');
   });
 }
+/* Concealing the sentence adds a working-memory and syntax task, so the two
+   modes are not the same activity. Mixing them in one trend line would show a
+   change that is really a change of task.                                   */
+function mixedModeNote(p){
+  const good = p.sessions.filter(s=>s.valid);
+  const on = good.filter(s=>s.reveal).length, off = good.length - on;
+  if (!on || !off)
+    return `<div class="psub" style="margin-top:3px">โหมดโจทย์: ${on?'แสดงประโยคตั้งแต่ต้น':'ซ่อนประโยค (ฝึกการรู้คิดด้วย)'}</div>`;
+  return `<div class="psub" style="margin-top:5px;color:var(--clay)">
+    ⚠️ ครั้งที่ผ่านมามีทั้งแบบแสดงประโยค (${on}) และซ่อนประโยค (${off})
+    — เวลาคิดของสองแบบเทียบกันโดยตรงไม่ได้</div>`;
+}
+
 const stat=(l,v)=>`<div><div class="psub">${l}</div><div class="mono" style="font-size:20px;font-weight:600">${v}</div></div>`;
 const miniTile=(l,col,v,u)=>`<div class="card tile"><div class="body">
   <div class="psub" style="margin-bottom:7px">${l} <span class="mono" style="font-size:10.5px;opacity:.55">${col}</span></div>
@@ -878,6 +959,10 @@ const miniTile=(l,col,v,u)=>`<div class="card tile"><div class="body">
 
 function dualNote(good){
   if (good.length<4) return '';
+  const mixed = good.some(s=>s.reveal) && good.some(s=>!s.reveal);
+  if (mixed) return `<div style="font-size:13px;color:var(--clay);margin-top:12px;line-height:1.6">
+    ไม่สรุปแนวโน้มเวลาคิด เพราะครั้งที่ผ่านมาใช้โหมดโจทย์ต่างกัน
+    (แบบซ่อนประโยคต้องคิดลำดับคำเอง จึงใช้เวลาคิดมากกว่าโดยธรรมชาติ)</div>`;
   const k=Math.min(3,Math.floor(good.length/2));
   const p0=avg(good.slice(0,k).map(s=>s.planMs).filter(v=>v!=null));
   const p1=avg(good.slice(-k).map(s=>s.planMs).filter(v=>v!=null));
@@ -957,8 +1042,15 @@ function renderSession(){
       <span class="quality${s.valid?'':' bad'}">${s.valid?'✓ คุณภาพข้อมูลดี':'✕ ไม่ใช้ในการคำนวณ'} · ${n1(s.fps)} fps</span>
       ${s.endedEarly?`<span class="tag t-down"><i></i>จบก่อนกำหนด · ${s.done}/${s.total??'?'} ข้อ</span>`:
         `<span class="tag t-up"><i></i>เล่นครบ ${s.done} ข้อ</span>`}
+      <span class="tag ${s.reveal?'t-new':'t-flat'}"><i></i>${s.reveal?'แสดงประโยค':'ซ่อนประโยค'}</span>
     </div></div></div>
 
+  <div class="grid g4" style="margin-bottom:16px">
+    ${miniTile('ถูกครั้งแรก','attempts', s.firstTry==null?'—':Math.round(s.firstTry)+'%')}
+    ${miniTile('วางผิดเฉลี่ย','misplaced', n1(s.misplacedPerQ),'คำ/ข้อ')}
+    ${miniTile('คะแนนที่ได้','q_points', s.efficiency==null?'—':Math.round(s.efficiency)+'%','ของเต็ม')}
+    ${miniTile('ใช้เฉลย','hint_used', String(s.hints))}
+  </div>
   <div class="grid g4" style="margin-bottom:16px">
     ${miniTile('ความตรงของการเคลื่อนไหว','path_ratio', n2(s.pathRatio))}
     ${miniTile('ความนุ่มนวล','submoves', n1(s.submoves))}
@@ -1028,7 +1120,10 @@ function sessionNote(s, idx){
   if (s.submoves!=null) parts.push(`ความนุ่มนวล ${n1(s.submoves)} ครั้งต่อการเอื้อม`);
   if (s.closeMs!=null&&s.releaseMs!=null)
     parts.push(`เวลาปิดมือ ${secs(s.closeMs)} วินาที เวลาปล่อย ${secs(s.releaseMs)} วินาที`);
+  if (s.firstTry!=null) parts.push(`เรียงถูกตั้งแต่ครั้งแรกร้อยละ ${Math.round(s.firstTry)} ของข้อที่ทำ`);
   if (s.pinchPct!=null) parts.push(`ใช้การจีบนิ้วร้อยละ ${Math.round(s.pinchPct)} ของการหยิบ`);
+  parts.push(s.reveal ? 'ใช้โหมดแสดงประโยคโจทย์ตั้งแต่เริ่มข้อ'
+                      : 'ใช้โหมดซ่อนประโยคโจทย์ ผู้ป่วยต้องเรียงลำดับคำเองซึ่งเพิ่มภาระด้านการรู้คิด');
   if (s.fatiguePct!=null&&s.fatiguePct>15)
     parts.push(`พบเวลาเอื้อมเพิ่มขึ้นร้อยละ ${s.fatiguePct.toFixed(0)} ระหว่างการฝึก ซึ่งสอดคล้องกับความล้า`);
   if (!s.valid) parts.push('หมายเหตุ ข้อมูลครั้งนี้ไม่ผ่านเกณฑ์คุณภาพจึงไม่นำไปคำนวณแนวโน้ม');
@@ -1056,6 +1151,10 @@ function buildReport(){
       <dt>ผู้ป่วย</dt><dd>${esc(pname(p))}</dd>
       <dt>ข้างที่ฝึก</dt><dd>${SIDE[p.side]??p.side} · ท่า${POSE[p.posture]??p.posture}</dd>
       <dt>ช่วงรายงาน</dt><dd>${THDATE(p.sessions[0].ts)} – ${THDATE(p.last.ts)} (${p.n} ครั้ง${p.nValid<p.n?`, ใช้คำนวณได้ ${p.nValid} ครั้ง`:''})</dd>
+      <dt>โหมดโจทย์</dt><dd>${(()=>{const g=p.sessions.filter(x=>x.valid);
+        const on=g.filter(x=>x.reveal).length, off=g.length-on;
+        return on&&off ? `ผสม (แสดงประโยค ${on} ครั้ง · ซ่อนประโยค ${off} ครั้ง)`
+             : on ? 'แสดงประโยคโจทย์ตั้งแต่เริ่มข้อ' : 'ซ่อนประโยคโจทย์ (ฝึกการรู้คิดร่วมด้วย)';})()}</dd>
       <dt>ปริมาณการฝึก</dt><dd>รวม ${Math.floor(p.totalMs/3600000)} ชั่วโมง ${Math.round(p.totalMs%3600000/60000)} นาที ·
         ${p.totalMoves.toLocaleString()} การเคลื่อนไหว · เฉลี่ย ${p.perWeek.toFixed(1)} ครั้ง/สัปดาห์</dd>
     </dl>
