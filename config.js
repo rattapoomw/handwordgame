@@ -10,7 +10,7 @@
 
    Anything you delete or omit falls back to a sensible default, so a partial
    config is fine.
-   - Rattapoom
+   - Rattapoom Waranusast
    =========================================================================== */
 
 window.APP_CONFIG = {
