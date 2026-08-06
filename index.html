@@ -29,7 +29,7 @@
   }
   html,body{height:100%;margin:0;overflow:hidden;background:#070b18;}
   body{font-family:"Noto Sans Thai","Sarabun",system-ui,sans-serif;-webkit-tap-highlight-color:transparent;}
-  #video{position:fixed;inset:0;width:100%;height:100%;object-fit:contain;transform:scaleX(-1);z-index:0;background:#070b18;}
+  #video{position:fixed;left:0;top:0;width:100%;height:100%;object-fit:fill;transform:scaleX(-1);z-index:0;background:#070b18;}
   #canvas{position:fixed;inset:0;width:100%;height:100%;z-index:10;touch-action:none;cursor:none;}
   .layer{position:fixed;inset:0;z-index:20;pointer-events:none;}
   .glass{background:linear-gradient(160deg,rgba(255,255,255,.16),rgba(255,255,255,.06));
@@ -610,12 +610,24 @@ function reachRect(){
   return { x:x0, y:y0, w:Math.max(40, x1-x0), h:Math.max(40, y1-y0) };
 }
 
+/* The video element is positioned and sized from videoRect() rather than left
+   to CSS object-fit. object-fit computes its own rectangle, and for a 4:3
+   camera in a wide window 'cover' fills the WIDTH while our 'fill' mode fills
+   the HEIGHT — two different rectangles, so the cursor mapping drifted and the
+   error grew toward the edges. Sizing the element ourselves means the picture
+   and the maths cannot disagree.                                            */
+function applyVideoBox(){
+  const r = videoRect();
+  video.style.left   = r.x + 'px';
+  video.style.top    = r.y + 'px';
+  video.style.width  = r.w + 'px';
+  video.style.height = r.h + 'px';
+}
+
 function setFit(mode){
   if (FITS.indexOf(mode) < 0) mode = 'fill';
   G.fit = mode;
-  // 'fill' is height-fill with side crop, which is what CSS cover does when the
-  // source is narrower than the window; contain/cover map directly.
-  video.style.objectFit = (mode==='contain') ? 'contain' : 'cover';
+  video.style.objectFit = 'fill';      // exactly fill the box we set below
   store.set('thaiAR.fit', mode);
   const b = document.getElementById('btnFit');
   if (b) b.textContent = 'มุมมอง: ' + FIT_LABEL[mode];
@@ -631,6 +643,8 @@ function resize(){
   canvas.width = G.W*dpr; canvas.height = G.H*dpr;
   canvas.style.width = G.W+'px'; canvas.style.height = G.H+'px';
   ctx.setTransform(dpr,0,0,dpr,0,0);
+
+  applyVideoBox();                     // picture and maths share one rectangle
 
   G.s = Math.max(0.55, Math.min(G.W/1100, G.H/760));
   G.cardW = 148*G.s; G.cardH = 158*G.s;
@@ -1267,11 +1281,26 @@ function drawHUD(now){
     text(String(G.score), px+pw-18*G.s, py+ph*0.20, Math.max(22, L.qSize*0.62), '700', '#fcd34d', 'right');
   }
 
-  // the question itself — the thing the player is actually reading
-  const showing = now < G.hintUntil;
-  textFit(showing ? `“${lv.en}”` : lv.th,
-          G.W/2, py+ph*0.62, showing ? L.qSize*0.72 : L.qSize, pw-36*G.s,
-          '700', showing ? '#fcd34d' : '#fff');
+  /* The prompt. When concealed the patient must derive the word order from the
+     cards alone; เฉลย still reveals it on demand and it is always shown once
+     the answer is correct.                                                  */
+  const hinting  = now < G.hintUntil;
+  const revealed = PLAYER.reveal || hinting || G.screen === 'win';
+  if (revealed){
+    textFit(lv.th, G.W/2, py+ph*0.62, L.qSize, pw-36*G.s, '700',
+            (hinting && !PLAYER.reveal) ? '#fcd34d' : '#fff');
+  } else {
+    textFit(`เรียงคำให้เป็นประโยคที่ถูกต้อง (${lv.n||lv.words.length} คำ)`,
+            G.W/2, py+ph*0.55, L.qSize*0.58, pw-36*G.s, '700', 'rgba(255,255,255,.62)');
+    const n = lv.n||lv.words.length;
+    const bw = Math.min(52*G.s, (pw-70*G.s)/n - 10*G.s), gapB = 10*G.s;
+    const tot = n*bw + (n-1)*gapB, bx = G.W/2 - tot/2, by = py+ph*0.80;
+    ctx.save();
+    ctx.strokeStyle='rgba(255,255,255,.32)'; ctx.lineWidth=1.6*G.s;
+    ctx.setLineDash([5*G.s,4*G.s]);
+    for (let i=0;i<n;i++) { rr(bx+i*(bw+gapB), by-9*G.s, bw, 18*G.s, 5*G.s); ctx.stroke(); }
+    ctx.restore();
+  }
 
   // progress pips for the current stage
   const r=5.5*G.s, gapP=18*G.s, x0=G.W/2-(st.questions-1)*gapP/2;
