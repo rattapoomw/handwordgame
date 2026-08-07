@@ -92,6 +92,12 @@ window.APP_CONFIG = {
        The sentence is always revealed once the answer is correct.           */
     revealSentence : false,
 
+    /* Start-up appearance: 'camera' shows the live video behind the game,
+       'dark' and 'light' replace it with a high-contrast plain background
+       (hand skeleton and status colours stay). Toggle in game with the
+       ภาพ button or the V key.                                          */
+    theme : 'camera',
+
     /* Camera framing on first run: 'fill' (height-fill, sides cropped —
        best for a 4:3 webcam on a wide screen), 'contain', or 'cover'.       */
     fit : 'fill',

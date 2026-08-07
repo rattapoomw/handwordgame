@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<title>NU Word Grasping Game · เกมบริหารมือเรียงคำภาษาไทย</title>
+<title>NU Word Grasping Game · เกมเรียงคำเพื่อการบริหารมือและสมอง</title>
 
 <script src="https://cdn.tailwindcss.com"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -40,6 +40,19 @@
   @keyframes fade{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
   @media (prefers-reduced-motion: reduce){.fade-in{animation:none}}
   .hidden{display:none!important}
+  /* top control bar — plain CSS so it wraps reliably regardless of Tailwind */
+  /* Therapist controls, mouse-operated. Bottom-right keeps them clear of the
+     canvas HUD along the top and of the จบเกม button at bottom-left. */
+  #topBar{position:absolute;bottom:12px;right:12px;left:auto;max-width:52vw;
+    display:flex;flex-wrap:wrap;justify-content:flex-end;align-items:flex-end;
+    gap:6px;pointer-events:none}
+  #topBar > *{pointer-events:auto;flex:0 0 auto;font-size:13px;
+    padding:7px 11px;border-radius:10px;line-height:1.2;white-space:nowrap}
+  /* light theme: the DOM chrome is white-on-glass, so flip it */
+  body.hc-light .glass{background:linear-gradient(160deg,#EDF1F3,#E3E9EC);
+    border-color:#404A54;color:#000;box-shadow:0 8px 22px rgba(0,0,0,.14)}
+  body.hc-light #topBar button, body.hc-light #pinchBar button{color:#000}
+  body.hc-light .glass:hover{background:#DCE4E7}
   /* logo plate on the start screen */
   .logobar{
     display:flex; align-items:center; justify-content:center; gap:clamp(10px,3vw,20px);
@@ -64,11 +77,12 @@
 
 <!-- ===== Top control bar (mouse clickable) ===== -->
 <div class="layer">
-  <div id="topBar" class="hidden absolute top-3 right-3 flex gap-2" style="pointer-events:auto">
-    <button id="syncChip" class="glass rounded-xl px-3 py-2 text-sm font-semibold hover:bg-white/20 transition">☁️</button>
-    <button id="btnFit" class="glass rounded-xl px-3 py-2 text-sm font-semibold hover:bg-white/20 transition">มุมมอง: เต็มภาพ</button>
-    <button id="btnHint" class="glass rounded-xl px-3 py-2 text-sm font-semibold hover:bg-white/20 transition">เฉลย (H)</button>
-    <button id="btnReset" class="glass rounded-xl px-3 py-2 text-sm font-semibold hover:bg-white/20 transition">เล่นข้อนี้ใหม่</button>
+  <div id="topBar" class="hidden" style="pointer-events:auto">
+    <button id="btnTheme" class="glass rounded-xl px-2.5 py-1.5 text-xs md:text-sm font-semibold hover:bg-white/20 transition whitespace-nowrap">ภาพ: กล้อง</button>
+    <button id="syncChip" class="glass rounded-xl px-2.5 py-1.5 text-xs md:text-sm font-semibold hover:bg-white/20 transition whitespace-nowrap">☁️</button>
+    <button id="btnFit" class="glass rounded-xl px-2.5 py-1.5 text-xs md:text-sm font-semibold hover:bg-white/20 transition whitespace-nowrap">มุมมอง: เต็มภาพ</button>
+    <button id="btnHint" class="glass rounded-xl px-2.5 py-1.5 text-xs md:text-sm font-semibold hover:bg-white/20 transition whitespace-nowrap">เฉลย (H)</button>
+    <button id="btnReset" class="glass rounded-xl px-2.5 py-1.5 text-xs md:text-sm font-semibold hover:bg-white/20 transition whitespace-nowrap">เล่นข้อนี้ใหม่</button>
   </div>
 </div>
 
@@ -83,7 +97,7 @@
       <img src="images/nu-36.png" alt="วาระครบรอบ 36 ปี มหาวิทยาลัยนเรศวร" class="logo-36" />
     </div>
     <h1 class="text-3xl md:text-4xl font-bold tracking-tight leading-tight">NU Word Grasping Game</h1>
-    <h2 class="mt-1.5 text-xl md:text-2xl font-semibold text-emerald-300 tracking-tight">เกมบริหารมือเรียงคำภาษาไทย</h2>
+    <h2 class="mt-1.5 text-xl md:text-2xl font-semibold text-emerald-300 tracking-tight">เกมเรียงคำเพื่อการบริหารมือและสมอง</h2>
     <p class="mt-3 text-sm text-white/70">โดย รัฐภูมิ วรานุสาสน์</p>
     <div class="mt-5 mb-1 mx-auto h-px w-24 bg-white/25"></div>
     <p class="mt-4 text-white/75 leading-relaxed">
@@ -345,6 +359,7 @@ const G = {
   playlist : [],
   solved : 0,
   fit : 'fill',
+  theme : 'camera',
   qPerStage : 5,
   totalRounds : 15,
   bankLoaded : false,
@@ -596,6 +611,68 @@ function videoRect(){
 function mapPoint(nx, ny){
   const r = videoRect();
   return { x: r.x + (1-nx)*r.w, y: r.y + ny*r.h };   // 1-nx → mirrored view
+}
+
+/* =========================================================================
+   THEMES
+   'camera' keeps the live video behind the game. The two high-contrast modes
+   replace it with a plain background so text, cards and icons stand out; the
+   hand skeleton and the status cursor remain, so control is unchanged.
+   Every status colour also differs in SHAPE (dashed ring, double ring, ✕),
+   because red/green confusion affects ~8% of men and this population skews
+   older and male.
+   ========================================================================= */
+const THEMES = {
+  camera: { name:'กล้อง', video:true,
+    ink:'#FFFFFF', ink2:'rgba(255,255,255,.72)', ink3:'rgba(255,255,255,.55)',
+    panelA:'rgba(255,255,255,.17)', panelB:'rgba(255,255,255,.06)', panelLine:'rgba(255,255,255,.38)',
+    cardA:'rgba(255,255,255,.30)', cardB:'rgba(255,255,255,.12)', cardLine:'rgba(255,255,255,.55)',
+    cardInk:'#FFFFFF', cardSub:'rgba(255,255,255,.6)',
+    slotFill:'rgba(255,255,255,.05)', slotLine:'rgba(255,255,255,.45)', slotInk:'rgba(255,255,255,.30)',
+    bone:'rgba(255,255,255,.55)', boneGrab:'rgba(52,211,153,.85)', joint:'rgba(255,255,255,.9)',
+    tip:'#38BDF8', thumb:'#f472b6',
+    idle:'#38BDF8', hover:'#facc15', hold:'#22c55e', miss:'#ef4444',
+    accent:'#fcd34d', good:'#4ade80', warn:'#fbbf24', bad:'#f87171', streak:'#fb923c',
+    scrim:true },
+
+  dark: { name:'พื้นดำ', video:false, bg:'#050608',
+    ink:'#FFFFFF', ink2:'#C8D2D8', ink3:'#94A3AD',
+    panelA:'#141922', panelB:'#0E1218', panelLine:'#46515E',
+    cardA:'#232A34', cardB:'#161C24', cardLine:'#FFFFFF',
+    cardInk:'#FFFFFF', cardSub:'#B7C3CB',
+    slotFill:'#0C1015', slotLine:'#8A97A3', slotInk:'#7B8894',
+    bone:'#FFFFFF', boneGrab:'#00E676', joint:'#FFFFFF',
+    tip:'#4DD8FF', thumb:'#FF8FC7',
+    idle:'#4DD8FF', hover:'#FFD400', hold:'#00E676', miss:'#FF6B3D',
+    accent:'#FFD400', good:'#00E676', warn:'#FFD400', bad:'#FF6B3D', streak:'#FFA24D',
+    scrim:false },
+
+  light: { name:'พื้นขาว', video:false, bg:'#FFFFFF',
+    ink:'#000000', ink2:'#3A4650', ink3:'#5A6772',
+    panelA:'#EDF1F3', panelB:'#E3E9EC', panelLine:'#404A54',
+    cardA:'#FFFFFF', cardB:'#F4F7F8', cardLine:'#000000',
+    cardInk:'#000000', cardSub:'#3A4650',
+    slotFill:'#F2F5F7', slotLine:'#5A6772', slotInk:'#6B7883',
+    bone:'#101418', boneGrab:'#00733E', joint:'#101418',
+    tip:'#0057C8', thumb:'#B0006B',
+    idle:'#0057C8', hover:'#B25E00', hold:'#00733E', miss:'#C1121F',
+    accent:'#8A4B00', good:'#00733E', warn:'#B25E00', bad:'#C1121F', streak:'#B25E00',
+    scrim:false }
+};
+const THEME_ORDER = ['camera','dark','light'];
+let T = THEMES.camera;                       // active palette
+
+function setTheme(key){
+  if (!THEMES[key]) key = 'camera';
+  G.theme = key; T = THEMES[key];
+  video.style.visibility = T.video ? 'visible' : 'hidden';
+  document.body.style.background = T.video ? '#070b18' : T.bg;
+  document.body.classList.toggle('hc-light', key === 'light');
+  store.set('thaiAR.theme', key);
+  const b = document.getElementById('btnTheme');
+  if (b) b.textContent = 'ภาพ: ' + T.name;
+  const f = document.getElementById('btnFit');
+  if (f) f.classList.toggle('hidden', !T.video);   // fit only matters with video
 }
 
 const FITS = ['fill','contain','cover'];
@@ -1103,10 +1180,10 @@ function glassPanel(x,y,w,h,r,alpha=1){
   ctx.save(); ctx.globalAlpha=alpha;
   ctx.shadowColor='rgba(0,0,0,.45)'; ctx.shadowBlur=30*G.s; ctx.shadowOffsetY=10*G.s;
   const g=ctx.createLinearGradient(x,y,x,y+h);
-  g.addColorStop(0,'rgba(255,255,255,.17)'); g.addColorStop(1,'rgba(255,255,255,.06)');
+  g.addColorStop(0,T.panelA); g.addColorStop(1,T.panelB);
   ctx.fillStyle=g; rr(x,y,w,h,r); ctx.fill();
   ctx.shadowColor='transparent';
-  ctx.strokeStyle='rgba(255,255,255,.38)'; ctx.lineWidth=1.4; ctx.stroke();
+  ctx.strokeStyle=T.panelLine; ctx.lineWidth=T.video?1.4:2; ctx.stroke();
   ctx.restore();
 }
 function text(str,x,y,size,weight='600',color='#fff',align='center'){
@@ -1126,6 +1203,15 @@ function textFit(str,x,y,size,maxW,weight='600',color='#fff',align='center'){
    camera view, so it is visually clear where a hand can and cannot be seen. */
 function drawReachFrame(){
   const vr = videoRect();
+  if (!T.video){                        // outline only — nothing to dim
+    const r = reachRect();
+    ctx.save();
+    ctx.strokeStyle = T.slotLine; ctx.globalAlpha = .5; ctx.lineWidth = 1.6;
+    ctx.setLineDash([10,8]);
+    ctx.strokeRect(r.x+.8, r.y+.8, r.w-1.6, r.h-1.6);
+    ctx.setLineDash([]); ctx.restore();
+    return;
+  }
   const bars = vr.x > 1 || vr.y > 1;
   if (!bars) return;
   ctx.save();
@@ -1146,6 +1232,10 @@ function drawReachFrame(){
 }
 
 function drawScrim(){
+  if (!T.scrim){                       // high-contrast: plain, even background
+    ctx.fillStyle = T.bg; ctx.fillRect(0,0,G.W,G.H);
+    return;
+  }
   const g=ctx.createLinearGradient(0,0,0,G.H);
   g.addColorStop(0,'rgba(6,10,26,.62)'); g.addColorStop(.45,'rgba(6,10,26,.30)'); g.addColorStop(1,'rgba(6,10,26,.68)');
   ctx.fillStyle=g; ctx.fillRect(0,0,G.W,G.H);
@@ -1159,13 +1249,13 @@ function drawHand(){
   const pts = HAND.landmarks.map(l=>mapPoint(l.x,l.y));
   ctx.save();
   ctx.lineCap='round';
-  ctx.strokeStyle = HAND.grabbing ? 'rgba(52,211,153,.85)' : 'rgba(255,255,255,.55)';
-  ctx.lineWidth = 4*G.s; ctx.shadowColor=ctx.strokeStyle; ctx.shadowBlur=10;
+  ctx.strokeStyle = HAND.grabbing ? T.boneGrab : T.bone;
+  ctx.lineWidth = (T.video?4:5.5)*G.s; ctx.shadowColor=ctx.strokeStyle; ctx.shadowBlur=T.video?10:0;
   CONNS.forEach(([a,b])=>{ ctx.beginPath(); ctx.moveTo(pts[a].x,pts[a].y); ctx.lineTo(pts[b].x,pts[b].y); ctx.stroke(); });
   ctx.shadowBlur=0;
   pts.forEach((p,i)=>{
     ctx.beginPath(); ctx.arc(p.x,p.y,(i===8||i===4?6:4)*G.s,0,7);
-    ctx.fillStyle = (i===8) ? '#38bdf8' : (i===4 ? '#f472b6' : 'rgba(255,255,255,.9)');
+    ctx.fillStyle = (i===8) ? T.tip : (i===4 ? T.thumb : T.joint);
     ctx.fill();
   });
   ctx.restore();
@@ -1177,10 +1267,10 @@ function drawCursor(now){
   const hovering= !!G.hover && !holding;
   const missed  = P.down && !holding;
 
-  let color = '#38bdf8', r = 17*G.s, dashed=false;
-  if (hovering){ color='#facc15'; r=27*G.s; dashed=true; }
-  if (missed)  { color='#ef4444'; r=20*G.s; }
-  if (holding) { color='#22c55e'; r=24*G.s; }
+  let color = T.idle, r = 17*G.s, dashed=false;
+  if (hovering){ color=T.hover; r=27*G.s; dashed=true; }
+  if (missed)  { color=T.miss;  r=20*G.s; }
+  if (holding) { color=T.hold;  r=24*G.s; }
 
   ctx.save();
   ctx.translate(P.x,P.y);
@@ -1191,7 +1281,14 @@ function drawCursor(now){
   ctx.setLineDash([]);
   if (holding){ const p=1+Math.sin(now/140)*0.12; ctx.beginPath(); ctx.arc(0,0,r*1.5*p,0,7); ctx.globalAlpha=.35; ctx.stroke(); ctx.globalAlpha=1; }
   ctx.shadowBlur=0;
-  ctx.beginPath(); ctx.arc(0,0,3.2*G.s,0,7); ctx.fillStyle=color; ctx.fill();
+  /* shape cue as well as colour — readable with no colour vision at all */
+  if (missed){
+    const d=6.5*G.s;
+    ctx.strokeStyle=color; ctx.lineWidth=3.6*G.s; ctx.lineCap='round';
+    ctx.beginPath(); ctx.moveTo(-d,-d); ctx.lineTo(d,d); ctx.moveTo(d,-d); ctx.lineTo(-d,d); ctx.stroke();
+  } else {
+    ctx.beginPath(); ctx.arc(0,0,3.2*G.s,0,7); ctx.fillStyle=color; ctx.fill();
+  }
   ctx.restore();
 }
 
@@ -1202,12 +1299,15 @@ function drawSlots(){
     ctx.save();
     ctx.setLineDash([11*G.s,8*G.s]);
     ctx.lineWidth = near?3.5*G.s:2*G.s;
-    ctx.strokeStyle = s.flash>0.05 ? `rgba(239,68,68,${0.35+s.flash*0.6})`
-                    : near ? 'rgba(250,204,21,.95)' : 'rgba(255,255,255,.45)';
-    ctx.fillStyle = near ? 'rgba(250,204,21,.14)' : 'rgba(255,255,255,.05)';
-    rr(x,y,w,h,20*G.s); ctx.fill(); ctx.stroke();
+    ctx.strokeStyle = s.flash>0.05 ? T.miss : (near ? T.hover : T.slotLine);
+    ctx.globalAlpha = s.flash>0.05 ? (0.45+s.flash*0.55) : 1;
+    ctx.fillStyle = near ? T.hover : T.slotFill;
+    if (near) ctx.globalAlpha = 0.16;
+    rr(x,y,w,h,20*G.s); ctx.fill();
+    ctx.globalAlpha = s.flash>0.05 ? (0.45+s.flash*0.55) : 1;
+    ctx.stroke(); ctx.globalAlpha = 1;
     ctx.setLineDash([]);
-    if (!cardInSlot(i)) text(String(i+1), s.x, s.y, 30*G.s, '700', 'rgba(255,255,255,.30)');
+    if (!cardInSlot(i)) text(String(i+1), s.x, s.y, 30*G.s, '700', T.slotInk);
     ctx.restore();
   });
 }
@@ -1224,24 +1324,27 @@ function drawCard(c, now){
   ctx.shadowBlur=(22+30*c.lift)*G.s; ctx.shadowOffsetY=(10+18*c.lift)*G.s;
 
   const g=ctx.createLinearGradient(-w/2,-h/2,w/2,h/2);
-  if (c.wrong>0.05){ g.addColorStop(0,'rgba(248,113,113,.42)'); g.addColorStop(1,'rgba(239,68,68,.22)'); }
-  else { g.addColorStop(0,'rgba(255,255,255,.30)'); g.addColorStop(.55,'rgba(255,255,255,.14)'); g.addColorStop(1,'rgba(160,190,255,.12)'); }
-  ctx.fillStyle=g; rr(-w/2,-h/2,w,h,20*G.s); ctx.fill();
+  if (c.wrong>0.05){ g.addColorStop(0,T.miss); g.addColorStop(1,T.miss); ctx.globalAlpha=T.video?.42:.35; }
+  else { g.addColorStop(0,T.cardA); g.addColorStop(1,T.cardB); }
+  ctx.fillStyle=g; rr(-w/2,-h/2,w,h,20*G.s); ctx.fill(); ctx.globalAlpha=1;
   ctx.shadowColor='transparent'; ctx.shadowOffsetY=0;
 
-  ctx.strokeStyle = c===G.held ? 'rgba(34,197,94,.95)' : (c===G.hover ? 'rgba(250,204,21,.9)' : 'rgba(255,255,255,.55)');
-  ctx.lineWidth=(c===G.held||c===G.hover)?3*G.s:1.6*G.s;
+  ctx.strokeStyle = c===G.held ? T.hold : (c===G.hover ? T.hover : T.cardLine);
+  ctx.lineWidth=(c===G.held||c===G.hover)?3.4*G.s:(T.video?1.6:2.6)*G.s;
   rr(-w/2,-h/2,w,h,20*G.s); ctx.stroke();
 
   // top gloss
   ctx.save(); rr(-w/2,-h/2,w,h,20*G.s); ctx.clip();
-  const gl=ctx.createLinearGradient(0,-h/2,0,-h/2+h*0.45);
-  gl.addColorStop(0,'rgba(255,255,255,.30)'); gl.addColorStop(1,'rgba(255,255,255,0)');
-  ctx.fillStyle=gl; ctx.fillRect(-w/2,-h/2,w,h*0.45); ctx.restore();
+  if (T.video){                        // gloss only reads over live video
+    const gl=ctx.createLinearGradient(0,-h/2,0,-h/2+h*0.45);
+    gl.addColorStop(0,'rgba(255,255,255,.30)'); gl.addColorStop(1,'rgba(255,255,255,0)');
+    ctx.fillStyle=gl; ctx.fillRect(-w/2,-h/2,w,h*0.45);
+  }
+  ctx.restore();
 
   text(c.emoji, 0, -h*0.13, h*0.40, '400', '#fff');
-  textFit(c.th, 0,  h*0.26, h*0.20,  w*0.86, '700', '#ffffff');
-  textFit(c.en, 0,  h*0.40, h*0.095, w*0.90, '600', 'rgba(255,255,255,.6)');
+  textFit(c.th, 0,  h*0.26, h*0.20,  w*0.86, '700', T.cardInk);
+  textFit(c.en, 0,  h*0.40, h*0.095, w*0.90, '600', T.cardSub);
   ctx.restore();
 }
 
@@ -1274,11 +1377,11 @@ function drawHUD(now){
   glassPanel(px,py,pw,ph,22*G.s);
   const head = `ด่าน ${lv.stage+1}/${STAGES.length} · ${st.label} · ข้อ ${lv.q+1}/${st.questions}`;
   if (L.wide){
-    text(head, G.W/2, py+ph*0.23, 15*G.s, '600', 'rgba(255,255,255,.72)');
+    text(head, G.W/2, py+ph*0.23, 15*G.s, '600', T.ink2);
   } else {
     // no room for a chip: stage info left, score right, both inside the panel
-    text(head, px+18*G.s, py+ph*0.21, 14*G.s, '600', 'rgba(255,255,255,.72)', 'left');
-    text(String(G.score), px+pw-18*G.s, py+ph*0.20, Math.max(22, L.qSize*0.62), '700', '#fcd34d', 'right');
+    text(head, px+18*G.s, py+ph*0.21, 14*G.s, '600', T.ink2, 'left');
+    text(String(G.score), px+pw-18*G.s, py+ph*0.20, Math.max(22, L.qSize*0.62), '700', T.accent, 'right');
   }
 
   /* The prompt. When concealed the patient must derive the word order from the
@@ -1288,15 +1391,15 @@ function drawHUD(now){
   const revealed = PLAYER.reveal || hinting || G.screen === 'win';
   if (revealed){
     textFit(lv.th, G.W/2, py+ph*0.62, L.qSize, pw-36*G.s, '700',
-            (hinting && !PLAYER.reveal) ? '#fcd34d' : '#fff');
+            (hinting && !PLAYER.reveal) ? T.accent : T.ink);
   } else {
     textFit(`เรียงคำให้เป็นประโยคที่ถูกต้อง (${lv.n||lv.words.length} คำ)`,
-            G.W/2, py+ph*0.55, L.qSize*0.58, pw-36*G.s, '700', 'rgba(255,255,255,.62)');
+            G.W/2, py+ph*0.55, L.qSize*0.58, pw-36*G.s, '700', T.ink3);
     const n = lv.n||lv.words.length;
     const bw = Math.min(52*G.s, (pw-70*G.s)/n - 10*G.s), gapB = 10*G.s;
     const tot = n*bw + (n-1)*gapB, bx = G.W/2 - tot/2, by = py+ph*0.80;
     ctx.save();
-    ctx.strokeStyle='rgba(255,255,255,.32)'; ctx.lineWidth=1.6*G.s;
+    ctx.strokeStyle=T.slotLine; ctx.lineWidth=1.8*G.s;
     ctx.setLineDash([5*G.s,4*G.s]);
     for (let i=0;i<n;i++) { rr(bx+i*(bw+gapB), by-9*G.s, bw, 18*G.s, 5*G.s); ctx.stroke(); }
     ctx.restore();
@@ -1306,7 +1409,7 @@ function drawHUD(now){
   const r=5.5*G.s, gapP=18*G.s, x0=G.W/2-(st.questions-1)*gapP/2;
   for (let i=0;i<st.questions;i++){
     ctx.beginPath(); ctx.arc(x0+i*gapP, L.pipY, i===lv.q ? r*1.4 : r, 0, 7);
-    ctx.fillStyle = i<lv.q ? '#4ade80' : (i===lv.q ? '#fcd34d' : 'rgba(255,255,255,.26)');
+    ctx.fillStyle = i<lv.q ? T.good : (i===lv.q ? T.accent : T.slotLine);
     ctx.fill();
   }
 
@@ -1317,11 +1420,11 @@ function drawHUD(now){
     glassPanel(c.x, c.y, c.w, c.h, 18*G.s);
     if (showScore){
       textFit(`คะแนน · ${G.solved}/${G.totalRounds} ข้อ`,
-           c.x+c.w/2, c.y+c.h*0.26, 14*G.s, c.w-20*G.s, '600', 'rgba(255,255,255,.68)');
-      textFit(String(G.score), c.x+c.w/2, c.y+c.h*0.66, c.h*0.62, c.w-22*G.s, '700', '#fcd34d');
+           c.x+c.w/2, c.y+c.h*0.26, 14*G.s, c.w-20*G.s, '600', T.ink2);
+      textFit(String(G.score), c.x+c.w/2, c.y+c.h*0.66, c.h*0.62, c.w-22*G.s, '700', T.accent);
     } else {
-      textFit('ทำไปแล้ว', c.x+c.w/2, c.y+c.h*0.26, 14*G.s, c.w-20*G.s, '600', 'rgba(255,255,255,.68)');
-      textFit(`${G.solved}/${G.totalRounds}`, c.x+c.w/2, c.y+c.h*0.66, c.h*0.55, c.w-22*G.s, '700', '#fcd34d');
+      textFit('ทำไปแล้ว', c.x+c.w/2, c.y+c.h*0.26, 14*G.s, c.w-20*G.s, '600', T.ink2);
+      textFit(`${G.solved}/${G.totalRounds}`, c.x+c.w/2, c.y+c.h*0.66, c.h*0.55, c.w-22*G.s, '700', T.accent);
     }
   }
 
@@ -1336,19 +1439,19 @@ function drawHUD(now){
     const atFloor = val <= SCORE.floor(n) * (hinted ? CF('game.hintScoreFactor',0.5) : 1) + 0.5;
     const cw = 168*G.s, ch = 54*G.s, cx = G.W - cw - 20*G.s, cy = L.py;
     glassPanel(cx, cy, cw, ch, 16*G.s);
-    text('ข้อนี้', cx+cw/2, cy+ch*0.28, 12.5*G.s, '600', 'rgba(255,255,255,.65)');
-    const col = val===full ? '#4ade80' : atFloor ? '#f87171' : '#fbbf24';
+    text('ข้อนี้', cx+cw/2, cy+ch*0.28, 12.5*G.s, '600', T.ink2);
+    const col = val===full ? T.good : atFloor ? T.bad : T.warn;
     text(`${val}${val<full?` / ${full}`:''}`, cx+cw/2, cy+ch*0.68, 21*G.s, '700', col);
 
     // streak flame
     if (SCORE.streak > 0){
       const need = CF('game.streakLength',3), into = SCORE.streak % need;
       const sy = cy + ch + 16*G.s;
-      text(`🔥 ${SCORE.streak}`, cx+cw-24*G.s, sy, 15*G.s, '700', '#fb923c');
+      text(`🔥 ${SCORE.streak}`, cx+cw-24*G.s, sy, 15*G.s, '700', T.streak);
       for (let i=0;i<need;i++){
         ctx.beginPath();
         ctx.arc(cx+16*G.s+i*14*G.s, sy, 4*G.s, 0, 7);
-        ctx.fillStyle = i < (into===0?need:into) ? '#fb923c' : 'rgba(255,255,255,.22)';
+        ctx.fillStyle = i < (into===0?need:into) ? T.streak : T.slotLine;
         ctx.fill();
       }
     }
@@ -1468,17 +1571,17 @@ function drawBanner(now){
   glassPanel(px,py,pw,ph,26*G.s);
   const pop = 1+Math.sin(Math.min(t,0.5)*Math.PI)*0.12;
   ctx.save(); ctx.translate(G.W/2, py+ph*0.36); ctx.scale(pop,pop);
-  text(G.banner.text, 0,0, 42*G.s, '700', '#4ade80'); ctx.restore();
-  textFit(G.banner.sub, G.W/2, py+ph*0.68, 22*G.s, pw-40*G.s, '600', '#fff');
+  text(G.banner.text, 0,0, 42*G.s, '700', T.good); ctx.restore();
+  textFit(G.banner.sub, G.W/2, py+ph*0.68, 22*G.s, pw-40*G.s, '600', T.ink);
   if (G.banner.en)
-    textFit(G.banner.en, G.W/2, py+ph*0.86, 15*G.s, pw-40*G.s, '600', 'rgba(255,255,255,.62)');
+    textFit(G.banner.en, G.W/2, py+ph*0.86, 15*G.s, pw-40*G.s, '600', T.ink3);
   if (G.banner.gain != null && CF('game.showScore', true)){
     const tag = G.banner.hinted ? ' (ใช้เฉลย)' : '';
     text(`+${G.banner.gain}${tag}`, G.W/2, py+ph*1.04, 17*G.s, '700',
-         G.banner.hinted ? '#fbbf24' : '#4ade80');
+         G.banner.hinted ? T.warn : T.good);
     if (G.banner.bonus)
       text(`🔥 ต่อเนื่อง ${G.banner.streak} ข้อ · โบนัส +${G.banner.bonus}`,
-           G.W/2, py+ph*1.20, 15*G.s, '700', '#fb923c');
+           G.W/2, py+ph*1.20, 15*G.s, '700', T.streak);
   }
   ctx.restore();
 }
@@ -1493,26 +1596,26 @@ function drawCommit(now){
   ctx.translate(b.x, b.y);
   ctx.shadowColor='rgba(16,185,129,.45)'; ctx.shadowBlur=(22+(on?20:0))*G.s; ctx.shadowOffsetY=6*G.s;
   const g=ctx.createLinearGradient(0,-b.h/2,0,b.h/2);
-  g.addColorStop(0,'rgba(255,255,255,.20)'); g.addColorStop(1,'rgba(255,255,255,.08)');
+  g.addColorStop(0,T.panelA); g.addColorStop(1,T.panelB);
   ctx.fillStyle=g; rr(-b.w/2,-b.h/2,b.w,b.h,b.h/2); ctx.fill();
   ctx.shadowColor='transparent';
 
   // countdown sweeps left→right inside the pill
   if (c.mode==='countdown'){
     ctx.save(); rr(-b.w/2,-b.h/2,b.w,b.h,b.h/2); ctx.clip();
-    ctx.fillStyle='rgba(52,211,153,.55)';
-    ctx.fillRect(-b.w/2,-b.h/2, b.w*p, b.h);
+    ctx.fillStyle=T.hold; ctx.globalAlpha=T.video?.55:.35;
+    ctx.fillRect(-b.w/2,-b.h/2, b.w*p, b.h); ctx.globalAlpha=1;
     ctx.restore();
   }
-  ctx.strokeStyle = on ? 'rgba(255,255,255,.95)' : 'rgba(52,211,153,.85)';
+  ctx.strokeStyle = on ? T.ink : T.hold;
   ctx.lineWidth = (on?3:2)*G.s; rr(-b.w/2,-b.h/2,b.w,b.h,b.h/2); ctx.stroke();
 
   if (c.mode==='countdown'){
-    text('กำลังตรวจคำตอบ…', 0, -8*G.s, 17*G.s, '700', '#fff');
-    text('ดึงการ์ดออกเพื่อแก้ไข · จีบนิ้วเพื่อส่งเลย', 0, 13*G.s, 10.5*G.s, '600', 'rgba(255,255,255,.75)');
+    text('กำลังตรวจคำตอบ…', 0, -8*G.s, 17*G.s, '700', T.ink);
+    text('ดึงการ์ดออกเพื่อแก้ไข · จีบนิ้วเพื่อส่งเลย', 0, 13*G.s, 10.5*G.s, '600', T.ink2);
   } else {
-    text('✓ ตรวจคำตอบ', 0, -6*G.s, 19*G.s, '700', '#fff');
-    text('จีบนิ้วที่ปุ่มนี้', 0, 15*G.s, 10.5*G.s, '600', 'rgba(255,255,255,.7)');
+    text('✓ ตรวจคำตอบ', 0, -6*G.s, 19*G.s, '700', T.ink);
+    text('จีบนิ้วที่ปุ่มนี้', 0, 15*G.s, 10.5*G.s, '600', T.ink2);
   }
   ctx.restore();
 }
@@ -1523,20 +1626,20 @@ function drawEndButton(now){
   ctx.translate(b.x,b.y);
   ctx.shadowColor='rgba(0,0,0,.45)'; ctx.shadowBlur=18*G.s; ctx.shadowOffsetY=6*G.s;
   const g=ctx.createLinearGradient(0,-b.h/2,0,b.h/2);
-  g.addColorStop(0,'rgba(244,63,94,.34)'); g.addColorStop(1,'rgba(190,18,60,.30)');
+  g.addColorStop(0,T.panelA); g.addColorStop(1,T.panelB);
   ctx.fillStyle=g; rr(-b.w/2,-b.h/2,b.w,b.h,b.h/2); ctx.fill();
   ctx.shadowColor='transparent';
   // dwell progress sweeps left→right
   if (hold>0){
     ctx.save(); rr(-b.w/2,-b.h/2,b.w,b.h,b.h/2); ctx.clip();
-    ctx.fillStyle='rgba(244,63,94,.85)';
-    ctx.fillRect(-b.w/2, -b.h/2, b.w*hold, b.h);
+    ctx.fillStyle=T.miss; ctx.globalAlpha=.8;
+    ctx.fillRect(-b.w/2, -b.h/2, b.w*hold, b.h); ctx.globalAlpha=1;
     ctx.restore();
   }
-  ctx.strokeStyle = hold>0 ? 'rgba(255,255,255,.95)' : 'rgba(255,255,255,.45)';
+  ctx.strokeStyle = hold>0 ? T.ink : T.miss;
   ctx.lineWidth = 2*G.s; rr(-b.w/2,-b.h/2,b.w,b.h,b.h/2); ctx.stroke();
-  text(hold>0 ? 'ค้างไว้…' : '\u23F9 จบเกม', 0, -2*G.s, 17*G.s, '700', '#fff');
-  text(hold>0 ? 'ปล่อยเพื่อยกเลิก' : 'ค้างไว้ 1 วิ', 0, 15*G.s, 10.5*G.s, '600', 'rgba(255,255,255,.7)');
+  text(hold>0 ? 'ค้างไว้…' : '\u23F9 จบเกม', 0, -2*G.s, 17*G.s, '700', T.ink);
+  text(hold>0 ? 'ปล่อยเพื่อยกเลิก' : 'ค้างไว้ 1 วิ', 0, 15*G.s, 10.5*G.s, '600', T.ink2);
   ctx.restore();
 }
 
@@ -1556,7 +1659,7 @@ function drawStatus(now){
   if (playing && px < eb.x+eb.w/2+10*G.s && py < eb.y+eb.h/2) py = eb.y - eb.h/2 - ph - 12*G.s;
   ctx.save(); ctx.globalAlpha=0.55+Math.sin(now/420)*0.25;
   glassPanel(px,py,pw,ph,16*G.s);
-  textFit(msg, G.W/2, py+ph/2, 14.5*G.s, pw-28*G.s, '600', G.camMsg ? '#fca5a5' : '#fde68a');
+  textFit(msg, G.W/2, py+ph/2, 14.5*G.s, pw-28*G.s, '600', G.camMsg ? T.bad : T.accent);
   ctx.restore();
 }
 
@@ -2150,6 +2253,10 @@ document.getElementById('btnAgain').addEventListener('click', ()=>{   // same pl
 document.getElementById('btnCsv').addEventListener('click', ()=>STATS.download());
 document.getElementById('btnFit').addEventListener('click', ()=>
   setFit(FITS[(FITS.indexOf(G.fit)+1) % FITS.length]));
+document.getElementById('btnTheme').addEventListener('click', ()=>
+  setTheme(THEME_ORDER[(THEME_ORDER.indexOf(G.theme)+1) % THEME_ORDER.length]));
+window.addEventListener('keydown', e=>{ if (e.key==='v'||e.key==='V')
+  setTheme(THEME_ORDER[(THEME_ORDER.indexOf(G.theme)+1) % THEME_ORDER.length]); });
 document.getElementById('btnReset').addEventListener('click', ()=>{
   if (G.screen==='play') buildLevel(G.level);     // replay the current question
 });
@@ -2206,6 +2313,7 @@ window.addEventListener('keydown', e=>{
 video.addEventListener('loadedmetadata', ()=>resize());   // real aspect known now
 
 /* ---------------------------- BOOT ---------------------------- */
+setTheme(store.get('thaiAR.theme') || CF('game.theme','camera'));
 setFit(store.get('thaiAR.fit') || CF('game.fit','fill'));
 STATS.flush();          // push anything left over from a previous session
 updateSyncChip();
