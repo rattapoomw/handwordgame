@@ -105,6 +105,12 @@ window.APP_CONFIG = {
     /* Hold time in ms for the จบเกม button (dwell-to-confirm). */
     endHoldMs : 1200,
 
+    /* Hold time in ms to lift a card that is ALREADY IN A SLOT. Stops a card
+       being knocked out of place while the hand withdraws after a drop.
+       Cards still in the tray are always picked up instantly.
+       Set to 0 to switch the protection off.                              */
+    slotPickHoldMs : 700,
+
     /* Show the English meaning for this long when เฉลย / H is pressed. */
     hintMs : 2500,
 

@@ -21,13 +21,13 @@ var HEADERS = ['rid','type','ts','sid','player_key','display_name',
                'plan_ms','solve_ms','move_ms','grasp_ms','path_pct','dist_pct',
                'path_ratio','peak_vel','ttp_pct','submoves','drop_err_pct','to_slot',
                'attempts','misplaced','correct_first','wrong_first','pct_first','pickups',
-               'fail_grasp','hint_used','completed','ap_max','ap_min','ap_exc',
-               'close_ms','release_ms','hold_sd','palm_face','cycles','cycle_ms',
-               'grip_close_th','grip_open_th','reveal','q_points','q_max','streak',
-               'bonus','score','rounds_done','rounds_total','q_per_level','stages_cleared',
-               'max_words','words_ok','words_wrong','duration_ms','no_hand_ms','ended_early',
-               'end_reason','input','fps_mean','fps_min','screen','ua',
-               'app','bank','received_at'];
+               'reposition','fail_grasp','hint_used','completed','ap_max','ap_min',
+               'ap_exc','close_ms','release_ms','hold_sd','palm_face','cycles',
+               'cycle_ms','grip_close_th','grip_open_th','reveal','q_points','q_max',
+               'streak','bonus','score','rounds_done','rounds_total','q_per_level',
+               'stages_cleared','max_words','words_ok','words_wrong','duration_ms','no_hand_ms',
+               'ended_early','end_reason','input','fps_mean','fps_min','screen',
+               'ua','app','bank','received_at'];
 
 function doPost(e) {
   // a whole class submitting at once will collide without this

@@ -387,6 +387,8 @@ const G = {
   lastGain    : null,
   lastBonus   : 0,
   commit      : null,
+  pickHold    : 0,
+  pickTarget  : null,
   lastHinted  : false,
   endHold     : 0,
   particles   : [],
@@ -869,7 +871,7 @@ function buildLevel(idx){
   // deal outward from the centre row — settles in ~0.3 s
   G.cards.forEach(c=>{ c.x = G.W/2; c.y = G.slots[0].y; c.pop = 1; });
   STATS.startRound();
-  G.commit = null;
+  G.commit = null; G.pickHold = 0; G.pickTarget = null;
   syncHintLabel();          // reset the −50% label for the new question
 }
 
@@ -1130,9 +1132,28 @@ function update(now, dt){
     if (!G.held && !locked) G.hover = cardAt(P.x, P.y);
     if (G.hover && G.hover !== prevHover) G.hoverSince = now;
 
-    // pick
+    /* Picking up a card that is ALREADY IN A SLOT needs a short hold. Patients
+       kept knocking a placed card out while withdrawing the hand after a drop,
+       which undoes work they had just done. A card still in the tray is picked
+       instantly, so the common action stays as quick as before.              */
+    const holdMs = CF('game.slotPickHoldMs', 700);
+    let takeIt = false;
     if (!locked && wantsGrab() && !G.held && G.hover){
+      if (G.hover.slot === null || holdMs <= 0){
+        takeIt = true;                                   // from the tray: immediate
+      } else {
+        if (G.pickTarget !== G.hover){ G.pickTarget = G.hover; G.pickHold = 0; }
+        G.pickHold = Math.min(1, G.pickHold + dt/holdMs);
+        if (G.pickHold >= 1) takeIt = true;
+      }
+    } else {
+      G.pickHold = Math.max(0, G.pickHold - dt/260);     // decays quickly on release
+      if (G.pickHold === 0) G.pickTarget = null;
+    }
+
+    if (takeIt){
       G.held = G.hover;
+      G.pickHold = 0; G.pickTarget = null;
       G.grabOff.x = G.held.x-P.x; G.grabOff.y = G.held.y-P.y;
       G.cards.splice(G.cards.indexOf(G.held),1); G.cards.push(G.held);   // draw on top
       G.held.pop = 1;
@@ -1140,6 +1161,7 @@ function update(now, dt){
       if (STATS.round){
         STATS.round.pickups++;
         if (!STATS.round.firstPick) STATS.round.firstPick = now;   // planning latency ends here
+        if (G.held.slot !== null) STATS.round.reposition = (STATS.round.reposition||0)+1;
       }
       MV.begin(G.held, now);
     }
@@ -1318,6 +1340,7 @@ function drawCursor(now){
   ctx.strokeStyle=color; ctx.lineWidth=3.5*G.s; ctx.shadowColor=color; ctx.shadowBlur=16; ctx.stroke();
   ctx.setLineDash([]);
   if (holding){ const p=1+Math.sin(now/140)*0.12; ctx.beginPath(); ctx.arc(0,0,r*1.5*p,0,7); ctx.globalAlpha=.35; ctx.stroke(); ctx.globalAlpha=1; }
+
   ctx.shadowBlur=0;
   /* shape cue as well as colour — readable with no colour vision at all */
   if (missed){
@@ -1367,9 +1390,28 @@ function drawCard(c, now){
   ctx.fillStyle=g; rr(-w/2,-h/2,w,h,20*G.s); ctx.fill(); ctx.globalAlpha=1;
   ctx.shadowColor='transparent'; ctx.shadowOffsetY=0;
 
-  ctx.strokeStyle = c===G.held ? T.hold : (c===G.hover ? T.hover : T.cardLine);
+  const settled = c.slot !== null && c !== G.held;
+  ctx.strokeStyle = c===G.held ? T.hold
+                  : (c===G.hover ? (settled ? T.ink3 : T.hover) : T.cardLine);
   ctx.lineWidth=(c===G.held||c===G.hover)?3.4*G.s:(T.video?1.6:2.6)*G.s;
   rr(-w/2,-h/2,w,h,20*G.s); ctx.stroke();
+
+  /* Progress arc while holding to lift a card that is already placed, so the
+     delay reads as "keep holding" rather than the card being unresponsive.
+     An arc, not a dashed rounded-rect: canvas cannot measure a path's length,
+     so a dash pattern on that shape overshoots.                            */
+  if (settled && c === G.pickTarget && G.pickHold > 0.02){
+    const rad = Math.min(w,h)*0.40;
+    ctx.save();
+    ctx.lineCap='round';
+    ctx.beginPath(); ctx.arc(0,0,rad,0,Math.PI*2);
+    ctx.strokeStyle=T.slotLine; ctx.globalAlpha=.35; ctx.lineWidth=5*G.s; ctx.stroke();
+    ctx.globalAlpha=1;
+    ctx.beginPath();
+    ctx.arc(0,0,rad,-Math.PI/2,-Math.PI/2 + Math.PI*2*G.pickHold);
+    ctx.strokeStyle=T.hover; ctx.lineWidth=5*G.s; ctx.stroke();
+    ctx.restore();
+  }
 
   // top gloss
   ctx.save(); rr(-w/2,-h/2,w,h,20*G.s); ctx.clip();
@@ -1766,7 +1808,7 @@ const STAT_COLS = [
   'sent_id','sent_th','n_words','card_th','grasp',
   'plan_ms','solve_ms','move_ms','grasp_ms',
   'path_pct','dist_pct','path_ratio','peak_vel','ttp_pct','submoves','drop_err_pct','to_slot',
-  'attempts','misplaced','correct_first','wrong_first','pct_first','pickups','fail_grasp','hint_used','completed',
+  'attempts','misplaced','correct_first','wrong_first','pct_first','pickups','reposition','fail_grasp','hint_used','completed',
   'ap_max','ap_min','ap_exc','close_ms','release_ms','hold_sd','palm_face','cycles','cycle_ms',
   'grip_close_th','grip_open_th',
   'reveal','q_points','q_max','streak','bonus','score','rounds_done','rounds_total','q_per_level',
@@ -1839,7 +1881,7 @@ STATS.logRound = function(lv, completed){
     correct_first: r.correctFirst ?? '', wrong_first: r.wrongFirst ?? '',
     pct_first: (r.correctFirst != null && (lv.n||lv.words.length))
                ? +(r.correctFirst / (lv.n||lv.words.length) * 100).toFixed(1) : '',
-    pickups:r.pickups,
+    pickups:r.pickups, reposition:r.reposition||0,
     fail_grasp:r.failGrasp, hint_used:r.hint, completed: completed?1:0,
     q_points: completed ? (G.lastGain ?? '') : '', q_max: SCORE.base(lv.n||lv.words.length),
     streak: completed ? SCORE.streak : '', bonus: completed ? (G.lastBonus||0) : '',
