@@ -48,6 +48,9 @@
     gap:6px;pointer-events:none}
   #topBar > *{pointer-events:auto;flex:0 0 auto;font-size:13px;
     padding:7px 11px;border-radius:10px;line-height:1.2;white-space:nowrap}
+  /* collapsed: only the ⚙ button shows, so the controls never cover the cards */
+  #topBar.collapsed > *:not(#btnMenu){display:none}
+  #btnMenu{order:99;font-size:16px;padding:7px 12px}
   /* light theme: the DOM chrome is white-on-glass, so flip it */
   body.hc-light .glass{background:linear-gradient(160deg,#EDF1F3,#E3E9EC);
     border-color:#404A54;color:#000;box-shadow:0 8px 22px rgba(0,0,0,.14)}
@@ -78,6 +81,7 @@
 <!-- ===== Top control bar (mouse clickable) ===== -->
 <div class="layer">
   <div id="topBar" class="hidden" style="pointer-events:auto">
+    <button id="btnMenu" class="glass rounded-xl px-2.5 py-1.5 text-sm font-semibold hover:bg-white/20 transition" aria-expanded="false" title="ตั้งค่า">⚙</button>
     <button id="btnTheme" class="glass rounded-xl px-2.5 py-1.5 text-xs md:text-sm font-semibold hover:bg-white/20 transition whitespace-nowrap">ภาพ: กล้อง</button>
     <button id="syncChip" class="glass rounded-xl px-2.5 py-1.5 text-xs md:text-sm font-semibold hover:bg-white/20 transition whitespace-nowrap">☁️</button>
     <button id="btnFit" class="glass rounded-xl px-2.5 py-1.5 text-xs md:text-sm font-semibold hover:bg-white/20 transition whitespace-nowrap">มุมมอง: เต็มภาพ</button>
@@ -762,6 +766,24 @@ function layoutLevel(){
   syncTargets();
 }
 
+/* Rectangles the cards must stay clear of: the DOM control stack, the จบเกม
+   button and the status bar. Without this the controls sit on top of a card
+   and the patient cannot reach it — obvious on a phone, where the buttons
+   stack vertically and cover a large part of the play area.                 */
+function uiKeepOut(){
+  const out = [];
+  const pad = 10*G.s;
+  const bar = document.getElementById('topBar');
+  if (bar && !bar.classList.contains('hidden')){
+    const b = bar.getBoundingClientRect();
+    if (b.width && b.height)
+      out.push({x:b.left-pad, y:b.top-pad, w:b.width+pad*2, h:b.height+pad*2});
+  }
+  const e = endBtnRect();
+  out.push({x:e.x-e.w/2-pad, y:e.y-e.h/2-pad, w:e.w+pad*2, h:e.h+pad*2});
+  return out;
+}
+
 /* Cards rest scattered around the centre row: never over the slots, never
    against a screen edge, and spread apart from each other.                  */
 function scatterCards(){
@@ -782,6 +804,7 @@ function scatterCards(){
   const bx0 = s0.x-hw-G.cardW*0.30, bx1 = s1.x+hw+G.cardW*0.30;
   const by0 = s0.y-hh-G.cardH*0.32, by1 = s0.y+hh+G.cardH*0.32;
 
+  const blocks = uiKeepOut();
   const placed = [];
   G.cards.forEach(c=>{
     let best={x:G.W/2,y:minY}, bestScore=-Infinity;
@@ -790,6 +813,10 @@ function scatterCards(){
       const y = minY + rnd()*Math.max(1, maxY-minY);
       const hitsSlots = !(x+hw < bx0 || x-hw > bx1 || y+hh < by0 || y-hh > by1);
       let score = hitsSlots ? -1e4 : 0;
+      for (const b of blocks){
+        const hit = !(x+hw < b.x || x-hw > b.x+b.w || y+hh < b.y || y-hh > b.y+b.h);
+        if (hit) score -= 1e4;
+      }
       if (placed.length){                                  // spread cards apart
         let minD = Infinity;
         for (const p of placed) minD = Math.min(minD, Math.hypot(x-p.x, y-p.y));
@@ -1437,23 +1464,29 @@ function drawHUD(now){
     const val = SCORE.value(n, misplaced, hinted);
     const full = SCORE.base(n);
     const atFloor = val <= SCORE.floor(n) * (hinted ? CF('game.hintScoreFactor',0.5) : 1) + 0.5;
-    const cw = 168*G.s, ch = 54*G.s, cx = G.W - cw - 20*G.s, cy = L.py;
-    glassPanel(cx, cy, cw, ch, 16*G.s);
-    text('ข้อนี้', cx+cw/2, cy+ch*0.28, 12.5*G.s, '600', T.ink2);
     const col = val===full ? T.good : atFloor ? T.bad : T.warn;
-    text(`${val}${val<full?` / ${full}`:''}`, cx+cw/2, cy+ch*0.68, 21*G.s, '700', col);
+    const need = CF('game.streakLength',3);
 
-    // streak flame
-    if (SCORE.streak > 0){
-      const need = CF('game.streakLength',3), into = SCORE.streak % need;
-      const sy = cy + ch + 16*G.s;
-      text(`🔥 ${SCORE.streak}`, cx+cw-24*G.s, sy, 15*G.s, '700', T.streak);
-      for (let i=0;i<need;i++){
-        ctx.beginPath();
-        ctx.arc(cx+16*G.s+i*14*G.s, sy, 4*G.s, 0, 7);
-        ctx.fillStyle = i < (into===0?need:into) ? T.streak : T.slotLine;
-        ctx.fill();
+    if (L.wide){
+      const cw = 168*G.s, ch = 54*G.s, cx = G.W - cw - 20*G.s, cy = L.py;
+      glassPanel(cx, cy, cw, ch, 16*G.s);
+      text('ข้อนี้', cx+cw/2, cy+ch*0.28, 12.5*G.s, '600', T.ink2);
+      text(`${val}${val<full?` / ${full}`:''}`, cx+cw/2, cy+ch*0.68, 21*G.s, '700', col);
+      if (SCORE.streak > 0){
+        const into = SCORE.streak % need, sy = cy + ch + 16*G.s;
+        text(`🔥 ${SCORE.streak}`, cx+cw-24*G.s, sy, 15*G.s, '700', T.streak);
+        for (let i=0;i<need;i++){
+          ctx.beginPath(); ctx.arc(cx+16*G.s+i*14*G.s, sy, 4*G.s, 0, 7);
+          ctx.fillStyle = i < (into===0?need:into) ? T.streak : T.slotLine; ctx.fill();
+        }
       }
+    } else {
+      /* narrow screen: no room for a separate panel beside the prompt, so the
+         question value rides on the pip row underneath it */
+      const y = L.pipY;
+      text(`ข้อนี้ ${val}${val<full?`/${full}`:''}`, px+14*G.s, y, 13*G.s, '700', col, 'left');
+      if (SCORE.streak > 0)
+        text(`🔥 ${SCORE.streak}`, px+pw-14*G.s, y, 13*G.s, '700', T.streak, 'right');
     }
   }
 }
@@ -2253,6 +2286,18 @@ document.getElementById('btnAgain').addEventListener('click', ()=>{   // same pl
 document.getElementById('btnCsv').addEventListener('click', ()=>STATS.download());
 document.getElementById('btnFit').addEventListener('click', ()=>
   setFit(FITS[(FITS.indexOf(G.fit)+1) % FITS.length]));
+/* On a phone the control stack is tall enough to sit on top of the cards, so
+   it hides behind one ⚙ button and opens only when the therapist needs it. */
+const topBarEl = document.getElementById('topBar');
+function setMenu(open){
+  topBarEl.classList.toggle('collapsed', !open);
+  document.getElementById('btnMenu').setAttribute('aria-expanded', open ? 'true' : 'false');
+  layoutLevel();                       // cards re-avoid the new control area
+}
+document.getElementById('btnMenu').addEventListener('click', ()=>
+  setMenu(topBarEl.classList.contains('collapsed')));
+setMenu(window.innerWidth >= 900);     // roomy screen: leave it open
+
 document.getElementById('btnTheme').addEventListener('click', ()=>
   setTheme(THEME_ORDER[(THEME_ORDER.indexOf(G.theme)+1) % THEME_ORDER.length]));
 window.addEventListener('keydown', e=>{ if (e.key==='v'||e.key==='V')
