@@ -51,6 +51,13 @@
   /* collapsed: only the ⚙ button shows, so the controls never cover the cards */
   #topBar.collapsed > *:not(#btnMenu){display:none}
   #btnMenu{order:99;font-size:16px;padding:7px 12px}
+  /* while open the stack sits above the board on its own backdrop, so it never
+     has to compete with a card for the same pixels */
+  #topBar:not(.collapsed){background:rgba(6,10,20,.72);backdrop-filter:blur(10px);
+    -webkit-backdrop-filter:blur(10px);border-radius:14px;padding:7px;
+    box-shadow:0 10px 30px rgba(0,0,0,.45)}
+  body.hc-light #topBar:not(.collapsed){background:rgba(255,255,255,.90);
+    box-shadow:0 10px 30px rgba(0,0,0,.20)}
   /* light theme: the DOM chrome is white-on-glass, so flip it */
   body.hc-light .glass{background:linear-gradient(160deg,#EDF1F3,#E3E9EC);
     border-color:#404A54;color:#000;box-shadow:0 8px 22px rgba(0,0,0,.14)}
@@ -773,9 +780,12 @@ function layoutLevel(){
 function uiKeepOut(){
   const out = [];
   const pad = 10*G.s;
-  const bar = document.getElementById('topBar');
-  if (bar && !bar.classList.contains('hidden')){
-    const b = bar.getBoundingClientRect();
+  /* Only the small ⚙ button and จบเกม are avoided. The expanded control stack
+     is NOT — reserving space for it would shrink the play area on a phone.
+     Instead the stack collapses itself the moment the patient starts playing. */
+  const menu = document.getElementById('btnMenu');
+  if (menu && menu.offsetParent !== null){
+    const b = menu.getBoundingClientRect();
     if (b.width && b.height)
       out.push({x:b.left-pad, y:b.top-pad, w:b.width+pad*2, h:b.height+pad*2});
   }
@@ -1126,6 +1136,7 @@ function update(now, dt){
       G.grabOff.x = G.held.x-P.x; G.grabOff.y = G.held.y-P.y;
       G.cards.splice(G.cards.indexOf(G.held),1); G.cards.push(G.held);   // draw on top
       G.held.pop = 1;
+      autoCloseMenu();
       if (STATS.round){
         STATS.round.pickups++;
         if (!STATS.round.firstPick) STATS.round.firstPick = now;   // planning latency ends here
@@ -2292,11 +2303,13 @@ const topBarEl = document.getElementById('topBar');
 function setMenu(open){
   topBarEl.classList.toggle('collapsed', !open);
   document.getElementById('btnMenu').setAttribute('aria-expanded', open ? 'true' : 'false');
-  layoutLevel();                       // cards re-avoid the new control area
 }
+/* Anything the patient does on the board closes the panel, so it can never be
+   left open on top of the cards. */
+function autoCloseMenu(){ if (!topBarEl.classList.contains('collapsed')) setMenu(false); }
 document.getElementById('btnMenu').addEventListener('click', ()=>
   setMenu(topBarEl.classList.contains('collapsed')));
-setMenu(window.innerWidth >= 900);     // roomy screen: leave it open
+setMenu(false);                        // always start closed; ⚙ opens it
 
 document.getElementById('btnTheme').addEventListener('click', ()=>
   setTheme(THEME_ORDER[(THEME_ORDER.indexOf(G.theme)+1) % THEME_ORDER.length]));
