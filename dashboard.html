@@ -167,6 +167,17 @@ tbody tr.click:hover{background:#FAFCFC;cursor:pointer}
       <button class="chipbtn" id="cfgDemo">ดูตัวอย่าง</button>
     </div>
     <div id="cfgResult" class="hidden" style="margin-top:14px;font-size:12.5px;line-height:1.6"></div>
+
+    <div style="border-top:1px solid var(--rule);margin-top:18px;padding-top:16px">
+      <div style="font-weight:600;font-size:13px;margin-bottom:4px">ผู้ป่วยที่เปิดอยู่</div>
+      <div class="psub" style="margin-bottom:10px">แต่ละคนเก็บอยู่ในไฟล์ของตัวเอง ประวัติจึงไม่ขาดตอนไม่ว่าจะผ่านไปนานแค่ไหน ·
+        การลบต้องตั้ง <span class="mono">ADMIN_KEY</span> ในสคริปต์ก่อน</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="chipbtn" id="btnExportPatient">⬇️ CSV ผู้ป่วยที่เปิดอยู่</button>
+        <button class="chipbtn" id="btnDeletePatient" style="border-color:#E0BDB4;color:var(--clay)">🗑 ลบผู้ป่วยรายนี้ถาวร</button>
+      </div>
+      <div id="admResult" class="hidden" style="margin-top:10px;font-size:12.5px;line-height:1.6"></div>
+    </div>
     <div style="border-top:1px solid var(--rule);margin-top:18px;padding-top:16px">
       <div style="font-size:12px;color:var(--ink-3);margin-bottom:8px">หรือเปิดจากไฟล์ CSV ที่ดาวน์โหลดจากเกม</div>
       <input type="file" id="cfgFile" accept=".csv,text/csv" />
@@ -454,12 +465,19 @@ const CFG = {
   set url(v){ v === CF('endpoint','') ? localStorage.removeItem('dash.url') : localStorage.setItem('dash.url', v); },
   get key(){ return ov('dash.key', CF('readKey','')); },
   set key(v){ v === CF('readKey','') ? localStorage.removeItem('dash.key') : localStorage.setItem('dash.key', v); },
-  get since(){ return ov('dash.since', String(CF('dashboard.sinceDays', 90))); },
+  /* Applied per-patient now, not globally — a patient's own file is small
+     enough that showing their full history by default is the point of this
+     architecture (nothing fragments them). Blank = all history.           */
+  get since(){ return ov('dash.since', String(CF('dashboard.sinceDays', ''))); },
   set since(v){ localStorage.setItem('dash.since', v); },
   get fromConfig(){ return localStorage.getItem('dash.url') === null && !!CF('endpoint',''); },
   clearOverrides(){ ['dash.url','dash.key','dash.since'].forEach(k=>localStorage.removeItem(k)); }
 };
-let DATA = { rows:[], sessions:[], patients:[], source:'', loadedAt:null };
+/* DATA.patients holds STUBS from the roster until a patient is opened, at
+   which point that entry is replaced with a fully-built patient object (see
+   openPatient). demoByPatient holds pre-generated rows for demo mode, since
+   there is no backend to call there.                                       */
+let DATA = { patients:[], source:'', loadedAt:null, demoByPatient:{}, lastOpenRows:[] };
 const STATE = { view:'caseload', patient:null, session:null,
                 masked: !!CF('dashboard.maskNames', false) };
 
@@ -493,17 +511,29 @@ const DIAG = {
 };
 function err(code){ const e = new Error(DIAG[code] || code); e.code = code; return e; }
 
-async function loadFromSheet(){
+/* Lightweight: one row per patient, no session data. Powers the caseload
+   screen and the left rail without opening a single patient file.          */
+async function loadRoster(){
   if (!CFG.url) throw new Error('ยังไม่ได้ตั้งค่า URL');
-  let u = CFG.url.trim() + '?action=data';
+  let u = CFG.url.trim() + '?action=roster';
   if (CFG.key) u += '&key=' + encodeURIComponent(CFG.key);
-  if (CFG.since){
-    const d = new Date(Date.now() - (+CFG.since)*864e5).toISOString().slice(0,10);
-    u += '&since=' + d;
-  }
   const d = await jsonp(u);
   if (!d || !d.ok) throw new Error((d && d.error) || 'endpoint ตอบกลับผิดพลาด');
-  return { rows: parseRows(d.columns, d.rows), source:'sheet' };
+  return parseRows(d.columns, d.rows);
+}
+
+/* Full raw log for ONE patient, from their own file. Called only when that
+   patient is actually opened.                                              */
+async function loadPatientRows(playerKey){
+  let u = CFG.url.trim() + '?action=data&player_key=' + encodeURIComponent(playerKey);
+  if (CFG.key) u += '&key=' + encodeURIComponent(CFG.key);
+  if (CFG.since){
+    const d0 = new Date(Date.now() - (+CFG.since)*864e5).toISOString().slice(0,10);
+    u += '&since=' + d0;
+  }
+  const d = await jsonp(u, 30000);
+  if (!d || !d.ok) throw new Error((d && d.error) || 'โหลดข้อมูลผู้ป่วยไม่สำเร็จ');
+  return parseRows(d.columns, d.rows);
 }
 
 /* CSV from the game's own export — same columns, quoted, may contain BOM */
@@ -525,15 +555,100 @@ function parseCSV(text){
   return parseRows(cols, rows.filter(r=>r.length>1));
 }
 
-function ingest(rows, source){
-  DATA.rows = rows;
-  DATA.sessions = buildSessions(rows);
-  DATA.patients = buildPatients(DATA.sessions);
+/* Turn one hub roster row into a lightweight patient card. .series carries
+   the cached metric history for the caseload sparkline; .change/.status
+   mirror the real fields a fully-built patient object has (see analytics.js
+   buildPatients), so the caseload table code works unmodified either way. */
+function patientStubFromHubRow(row){
+  const series = {
+    pathRatio: safeArr_(row.m_path_ratio), submoves: safeArr_(row.m_submoves),
+    moveMs: safeArr_(row.m_move_ms),       dropErr: safeArr_(row.m_drop_err_pct)
+  };
+  const change = {};
+  METRICS.forEach(m => { change[m.k] = changeFromSeries(series[m.k], m.lower); });
+  const lastTs = row.last_ts || row.first_ts || null;
+  const daysSince = lastTs ? Math.floor((Date.now()-Date.parse(lastTs))/864e5) : 999;
+  return {
+    key: row.player_key, name: row.display_name || row.player_key,
+    side: row.side||'', posture: row.posture||'', note: row.note||'',
+    n: num(row.n_sessions)||0, nValid: num(row.n_valid)||0,
+    last: { ts:lastTs, score:num(row.last_score) }, daysSince,
+    fileUrl: row.file_url||'',
+    change, series,
+    status: statusFromChange(change, daysSince),
+    stub: true, sessions: []
+  };
+}
+function safeArr_(s){ try{ const a=JSON.parse(s||'[]'); return Array.isArray(a)?a:[]; }catch(e){ return []; } }
+function changeFromSeries(vals, lower){
+  vals = (vals||[]).filter(v=>v!=null);
+  if (vals.length < 4) return null;
+  const k = Math.min(3, Math.floor(vals.length/2));
+  const base = avg(vals.slice(0,k)), cur = avg(vals.slice(-k));
+  if (!base) return null;
+  const raw = (cur-base)/Math.abs(base)*100;
+  return { pct: lower ? -raw : raw };
+}
+function statusFromChange(change, daysSince){
+  if (daysSince > LAPSED_DAYS) return 'gone';
+  const ch = METRICS.map(m=>change[m.k]).filter(Boolean).map(c=>c.pct);
+  if (ch.length < 2) return 'new';
+  const mean = avg(ch);
+  if (mean >= TREND_TH) return 'up';
+  if (mean <= -TREND_TH) return 'down';
+  return 'flat';
+}
+
+/* Roster load: every patient as a stub, sorted by who needs attention. */
+function ingestRoster(rows, source){
+  DATA.source = source || 'sheet';
+  DATA.patients = rows.map(patientStubFromHubRow).sort((a,b)=> rank(a.status)-rank(b.status) || b.n-a.n);
+  DATA.loadedAt = new Date();
+  STATE.patient = DATA.patients[0] || null;
+  STATE.session = null;
+  renderAll();
+}
+
+/* CSV upload has everything in memory already — no roster/stub split needed,
+   build every patient in full immediately, same as the old single-file flow. */
+function ingestFullRows(rows, source){
   DATA.source = source;
+  const sessions = buildSessions(rows);
+  DATA.patients = buildPatients(sessions).map(p=>Object.assign({stub:false}, p));
   DATA.loadedAt = new Date();
   STATE.patient = DATA.patients[0] || null;
   STATE.session = STATE.patient ? STATE.patient.last : null;
   renderAll();
+}
+
+/* Open one patient: fetch (or look up, for demo/CSV sources) their full raw
+   rows, run the SAME buildSessions/buildPatients pipeline used for a whole
+   file, and replace the stub in place. Everything downstream — renderPatient,
+   renderSession, buildReport — is unaware anything was lazy.               */
+async function openPatient(key){
+  const idx = DATA.patients.findIndex(p=>p.key===key);
+  if (idx < 0) return;
+  if (!DATA.patients[idx].stub){
+    STATE.patient = DATA.patients[idx];
+    STATE.session = STATE.patient.sessions.length ? STATE.patient.sessions[STATE.patient.sessions.length-1] : null;
+    renderBanners(); renderRail(); renderPatient(); renderSession(); go('patient');
+    return;
+  }
+  $('s-patient').innerHTML = `<div class="card"><div class="empty"><div class="big">⏳</div><div>กำลังโหลดข้อมูลผู้ป่วย…</div></div></div>`;
+  go('patient');
+  try{
+    const rows = DATA.source==='demo' ? (DATA.demoByPatient[key]||[]) : await loadPatientRows(key);
+    DATA.lastOpenRows = rows;
+    const sessions = buildSessions(rows);
+    const built = buildPatients(sessions)[0];
+    if (built) DATA.patients[idx] = Object.assign({stub:false}, built, { key });
+  }catch(e){
+    showError('โหลดข้อมูลผู้ป่วยไม่สำเร็จ: ' + e.message);
+  }
+  STATE.patient = DATA.patients[idx];
+  STATE.session = STATE.patient.sessions && STATE.patient.sessions.length
+    ? STATE.patient.sessions[STATE.patient.sessions.length-1] : null;
+  renderBanners(); renderRail(); renderPatient(); renderSession(); go('patient');
 }
 
 /* ===========================================================================
@@ -698,7 +813,10 @@ function renderBanners(){
   const b=[];
   if (DATA.source==='demo')
     b.push(`<div class="banner b-warn">⚠️ <div>กำลังแสดง<b>ข้อมูลตัวอย่าง</b> — ยังไม่ได้เชื่อมกับ Google Sheet จริง กด “ตั้งค่า” เพื่อใส่ URL</div></div>`);
-  const bad = DATA.sessions.filter(s=>!s.valid).length;
+  // each patient's own file is small enough to always show in full — there
+  // is no archived/stale view to warn about here anymore
+  const openPatientObj = STATE.patient && !STATE.patient.stub ? STATE.patient : null;
+  const bad = openPatientObj ? openPatientObj.sessions.filter(s=>!s.valid).length : 0;
   if (bad) b.push(`<div class="banner b-info">ℹ️ <div>ตัดข้อมูล ${bad} ครั้งออกจากการคำนวณ (เฟรมเรตต่ำกว่า ${GATE.fpsMin} fps, เล่นด้วยเมาส์ หรือจำนวนการเคลื่อนไหวน้อยกว่า ${GATE.minMovements})</div></div>`);
   $('banners').innerHTML=b.join('');
 }
@@ -709,14 +827,10 @@ function renderRail(){
     `<button data-key="${esc(p.key)}" class="${STATE.patient&&p.key===STATE.patient.key?'on':''}">${esc(pname(p))}
       <span class="meta"> · ${p.n} ครั้ง</span></button>`).join('')
     || '<div class="psub" style="padding:0 10px">ไม่มีข้อมูล</div>';
-  $('plist').querySelectorAll('button').forEach(b=>b.onclick=()=>{
-    STATE.patient = DATA.patients.find(p=>p.key===b.dataset.key);
-    STATE.session = STATE.patient.last;
-    renderRail(); renderPatient(); renderSession(); go('patient');
-  });
+  $('plist').querySelectorAll('button').forEach(b=>b.onclick=()=>openPatient(b.dataset.key));
   $('railfoot').innerHTML = DATA.loadedAt
-    ? `โหลดเมื่อ ${THTIME(DATA.loadedAt)} · ${DATA.rows.length.toLocaleString()} แถว<br>
-       ${DATA.source==='sheet'?'Google Sheet':DATA.source==='csv'?'ไฟล์ CSV':'ข้อมูลตัวอย่าง'}`
+    ? `โหลดรายชื่อเมื่อ ${THTIME(DATA.loadedAt)} · ${DATA.patients.length.toLocaleString()} คน<br>
+       ${DATA.source==='sheet'?'Google Sheet (แยกไฟล์ต่อผู้ป่วย)':DATA.source==='csv'?'ไฟล์ CSV':'ข้อมูลตัวอย่าง'}`
     : 'ยังไม่ได้โหลดข้อมูล';
 }
 
@@ -729,15 +843,16 @@ function renderCaseload(){
       <div class="psub" style="margin-top:8px">กด “ตั้งค่า” เพื่อเชื่อม Google Sheet, เปิดไฟล์ CSV หรือดูข้อมูลตัวอย่าง</div>
       </div></div>`; return; }
 
-  const week = P.filter(p=>p.daysSince<=7).reduce((a,p)=>
-    a+p.sessions.filter(s=>Date.now()-Date.parse(s.ts)<7*864e5).length,0);
+  // roster stubs don't carry per-session timestamps, only the rollup — a
+  // patient counts toward "this week" if their last play was within 7 days
+  const week = P.filter(p=>p.daysSince<=7).length;
   const decl = P.filter(p=>p.status==='down').length;
   const gone = P.filter(p=>p.status==='gone').length;
 
   $('s-caseload').innerHTML = `
   <div class="grid g4" style="margin-bottom:18px">
     ${tile(P.length,'คน','ผู้ป่วยทั้งหมด')}
-    ${tile(week,'ครั้ง','การเล่นใน 7 วันล่าสุด')}
+    ${tile(week,'คน','ผู้ป่วยที่เล่นใน 7 วันล่าสุด')}
     ${tile(decl,'คน','แนวโน้มถดถอย ควรทบทวนโปรแกรม', decl?'var(--clay)':null)}
     ${tile(gone,'คน','ไม่ได้เล่นเกิน 14 วัน')}
   </div>
@@ -749,7 +864,8 @@ function renderCaseload(){
     <tbody>${P.map(p=>{
       const [lab,cls]=STATUS[p.status];
       const c=p.change.pathRatio;
-      const vals=p.sessions.filter(s=>s.valid).map(s=>s.pathRatio);
+      const vals = p.stub ? (p.series && p.series.pathRatio || [])
+                           : p.sessions.filter(s=>s.valid).map(s=>s.pathRatio);
       return `<tr class="click" data-key="${esc(p.key)}">
         <td style="padding-left:14px"><div class="pname">${esc(pname(p))}</div>
           <div class="psub">${p.nValid<p.n?`ใช้ได้ ${p.nValid}/${p.n} ครั้ง`:'&nbsp;'}</div></td>
@@ -761,11 +877,7 @@ function renderCaseload(){
         <td><span class="tag ${cls}"><i></i>${lab}</span></td></tr>`;
     }).join('')}</tbody></table></div></div>`;
 
-  $('s-caseload').querySelectorAll('tr.click').forEach(r=>r.onclick=()=>{
-    STATE.patient=DATA.patients.find(p=>p.key===r.dataset.key);
-    STATE.session=STATE.patient.last;
-    renderRail(); renderPatient(); renderSession(); go('patient');
-  });
+  $('s-caseload').querySelectorAll('tr.click').forEach(r=>r.onclick=()=>openPatient(r.dataset.key));
 }
 const tile=(v,u,cap,col)=>`<div class="card tile"><div class="body">
   <div class="row"><span class="val mono" ${col?`style="color:${col}"`:''}>${v}</span><span class="unit">${u}</span></div>
@@ -775,6 +887,11 @@ const tile=(v,u,cap,col)=>`<div class="card tile"><div class="body">
 function renderPatient(){
   const p=STATE.patient;
   if (!p){ $('s-patient').innerHTML=''; return; }
+  if (p.stub){                             // full data not fetched yet — openPatient() re-renders once it lands
+    $('s-patient').innerHTML = `<div class="card"><div class="empty">
+      <div class="big">👤</div><div>เลือกผู้ป่วยจากรายชื่อเพื่อดูรายละเอียด</div></div></div>`;
+    return;
+  }
   const good=p.sessions.filter(s=>s.valid);
 
   const trend = METRICS.map(m=>{
@@ -1191,7 +1308,7 @@ function go(v){
   ['caseload','patient','session'].forEach(k=>$('s-'+k).classList.toggle('hidden',k!==v));
   document.querySelectorAll('.nav button').forEach(b=>b.setAttribute('aria-current',b.dataset.go===v));
   $('crumb').innerHTML=CRUMB[v]();
-  $('btnReport').classList.toggle('hidden', v==='caseload' || !STATE.patient);
+  $('btnReport').classList.toggle('hidden', v==='caseload' || !STATE.patient || STATE.patient.stub);
   window.scrollTo(0,0);
 }
 document.querySelectorAll('.nav button').forEach(b=>b.onclick=()=>go(b.dataset.go));
@@ -1209,6 +1326,7 @@ $('btnCfg').onclick=()=>{
         ? 'กำลังใช้ค่าที่ตั้งไว้เฉพาะเครื่องนี้ · <button id="cfgReset" class="underline">กลับไปใช้ค่าจาก config.js</button>'
         : '⚠️ ยังไม่ได้ตั้ง <span class="mono">endpoint</span> ในไฟล์ <span class="mono">config.js</span>');
   const r=$('cfgReset'); if (r) r.onclick=()=>{ CFG.clearOverrides(); $('btnCfg').onclick(); reload(); };
+  $('admResult').classList.add('hidden');
   $('cfg').classList.remove('hidden');
 };
 $('cfgClose').onclick=()=>$('cfg').classList.add('hidden');
@@ -1216,7 +1334,7 @@ $('cfgSave').onclick=async()=>{
   CFG.url=$('cfgUrl').value.trim(); CFG.key=$('cfgKey').value.trim(); CFG.since=$('cfgSince').value;
   $('cfg').classList.add('hidden'); await reload();
 };
-$('cfgDemo').onclick=()=>{ $('cfg').classList.add('hidden'); ingest(demoRows(),'demo'); };
+$('cfgDemo').onclick=()=>{ $('cfg').classList.add('hidden'); loadDemo(); };
 $('cfgTest').onclick=async()=>{
   const box=$('cfgResult'); box.classList.remove('hidden');
   const url=$('cfgUrl').value.trim();
@@ -1224,17 +1342,14 @@ $('cfgTest').onclick=async()=>{
   if (!/\/exec$/.test(url)){
     box.innerHTML='<span style="color:var(--clay)">URL ต้องลงท้ายด้วย <span class="mono">/exec</span> (ไม่ใช่ /dev หรือ /edit)</span>'; return; }
   box.textContent='กำลังทดสอบ…';
-  let u=url+'?action=data'; const k=$('cfgKey').value.trim();
+  let u=url+'?action=roster'; const k=$('cfgKey').value.trim();
   if (k) u+='&key='+encodeURIComponent(k);
   try{
     const d=await jsonp(u, 15000);
     if (!d.ok) throw new Error(d.error||'endpoint ตอบกลับว่าไม่สำเร็จ');
-    const types={}; const ti=d.columns.indexOf('type');
-    d.rows.forEach(r=>{ const t=r[ti]||'?'; types[t]=(types[t]||0)+1; });
     box.innerHTML=`<span style="color:var(--teal)">✓ เชื่อมต่อได้</span> —
-      ${d.rows.length.toLocaleString()} แถว · ${d.columns.length} คอลัมน์<br>
-      <span class="mono" style="font-size:11.5px">${esc(Object.entries(types).map(([k,v])=>k+':'+v).join(' · '))}</span>
-      ${d.columns.includes('ap_exc')?'':'<br><span style="color:var(--clay)">⚠️ ไม่พบคอลัมน์ ap_exc — ชีตยังเป็นสคีมาเก่า ให้ deploy สคริปต์ใหม่แล้วเล่นเกมอีกครั้ง</span>'}`;
+      ผู้ป่วย ${d.rows.length.toLocaleString()} คน · ${d.columns.length} คอลัมน์
+      ${d.columns.includes('m_path_ratio')?'':'<br><span style="color:var(--clay)">⚠️ ไม่พบคอลัมน์ m_path_ratio — สคริปต์ยังเป็นรุ่นเก่า ให้ deploy เวอร์ชันใหม่</span>'}`;
   }catch(e){
     box.innerHTML=`<span style="color:var(--clay)">✕ ${esc(e.message).replace(/\*\*(.+?)\*\*/g,'<b>$1</b>')}</span>`;
   }
@@ -1242,11 +1357,62 @@ $('cfgTest').onclick=async()=>{
 $('cfgFile').onchange=e=>{
   const f=e.target.files[0]; if(!f) return;
   const rd=new FileReader();
-  rd.onload=()=>{ try{ ingest(parseCSV(rd.result),'csv'); $('cfg').classList.add('hidden'); }
+  rd.onload=()=>{ try{ ingestFullRows(parseCSV(rd.result),'csv'); $('cfg').classList.add('hidden'); }
                   catch(err){ showError('อ่านไฟล์ CSV ไม่สำเร็จ: '+err.message); } };
   rd.readAsText(f,'utf-8');
 };
 $('btnReload').onclick=reload;
+
+/* ---------------------------------------------------------------- data admin
+   Every patient lives in their own file, so "reset" is scoped to whichever
+   patient is currently open, never to everyone at once. Deletion trashes
+   that patient's file in Drive and removes their hub row — no copy kept,
+   so it demands the admin key AND a typed confirmation.                    */
+function admSay(html, bad){
+  const b=$('admResult'); b.classList.remove('hidden');
+  b.innerHTML = `<span style="color:${bad?'var(--clay)':'var(--teal)'}">${html}</span>`;
+}
+async function adminCall(action, extra){
+  if (!CFG.url) { admSay('ยังไม่ได้ตั้งค่า URL', true); return null; }
+  const key = prompt('ใส่ ADMIN_KEY ที่ตั้งไว้ในสคริปต์');
+  if (!key) return null;
+  let u = CFG.url.trim() + '?action=' + action + '&admin=' + encodeURIComponent(key);
+  if (CFG.key) u += '&key=' + encodeURIComponent(CFG.key);
+  for (const k in (extra||{})) u += '&' + k + '=' + encodeURIComponent(extra[k]);
+  try{
+    const d = await jsonp(u, 30000);
+    if (!d || !d.ok) throw new Error((d && d.error) || 'ไม่สำเร็จ');
+    return d;
+  }catch(e){ admSay('ไม่สำเร็จ: ' + esc(e.message), true); return null; }
+}
+
+$('btnExportPatient').onclick=()=>{
+  const p = STATE.patient;
+  if (!p || p.stub || !DATA.lastOpenRows.length){ admSay('ยังไม่ได้เปิดข้อมูลผู้ป่วยแบบเต็ม', true); return; }
+  const cols=[...new Set(DATA.lastOpenRows.flatMap(r=>Object.keys(r)))];
+  const esc2=v=>`"${String(v??'').replace(/"/g,'""')}"`;
+  const csv='\ufeff'+[cols.join(',')].concat(
+    DATA.lastOpenRows.map(r=>cols.map(c=>esc2(r[c])).join(','))).join('\n');
+  const url=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));
+  const a=document.createElement('a');
+  a.href=url; a.download=`${p.key}_${new Date().toISOString().slice(0,10)}.csv`;
+  a.click(); setTimeout(()=>URL.revokeObjectURL(url),1000);
+  admSay(`บันทึกแล้ว ${DATA.lastOpenRows.length.toLocaleString()} แถว`);
+};
+
+$('btnDeletePatient').onclick=async()=>{
+  const p = STATE.patient;
+  if (!p){ admSay('ยังไม่ได้เลือกผู้ป่วย', true); return; }
+  if (!confirm(`⚠️ ลบข้อมูลผู้ป่วย "${pname(p)}" ทั้งหมดอย่างถาวร รวมถึงไฟล์ของผู้ป่วยรายนี้\n\nกู้คืนไม่ได้ ควรกด "CSV ผู้ป่วยที่เปิดอยู่" ก่อน\n\nต้องการทำต่อหรือไม่`)) return;
+  const typed = prompt('พิมพ์คำว่า  DELETE  เพื่อยืนยันการลบถาวร');
+  if (typed !== 'DELETE'){ admSay('ยกเลิกแล้ว — ไม่ได้ลบอะไร'); return; }
+  const d = await adminCall('deletePatient', { player_key:p.key, confirm:'DELETE' });
+  if (!d) return;
+  admSay(`ลบข้อมูลผู้ป่วย ${esc(p.key)} แล้ว`, true);
+  DATA.patients = DATA.patients.filter(x=>x.key!==p.key);
+  STATE.patient = DATA.patients[0] || null; STATE.session = null;
+  renderRail(); go('caseload'); renderCaseload();
+};
 
 function showError(msg, url, code){
   const bold = esc(msg).replace(/\*\*(.+?)\*\*/g,'<b>$1</b>');
@@ -1254,26 +1420,50 @@ function showError(msg, url, code){
       เปิด URL นี้ในแท็บใหม่เพื่อตรวจสอบ:
       <a href="${esc(url)}" target="_blank" rel="noopener" style="word-break:break-all">${esc(url)}</a>
       <div style="margin-top:6px;font-size:12px">
-        เห็นข้อความ <span class="mono">AR Thai stats endpoint is running.</span> = ยังเป็นสคริปต์เวอร์ชันเก่า ·
+        เห็นข้อความ <span class="mono">AR rehab stats endpoint is running.</span> = ยังเป็นสคริปต์เวอร์ชันเก่า ·
         เห็น <span class="mono">{"ok":true…}</span> = สคริปต์ถูกต้องแล้ว
       </div></div>` : '';
   $('banners').innerHTML =
     `<div class="banner b-err">⚠️ <div>${bold}${extra}</div></div>` + $('banners').innerHTML;
 }
+
+/* Demo mode has no backend, so a roster AND a full per-patient row set are
+   both generated locally. The roster is built by running the SAME
+   buildSessions/buildPatients pipeline used for real data, so demo numbers
+   are faithful rather than fabricated separately.                          */
+function loadDemo(){
+  const parsedAll = demoRows();
+  const byPatient = {};
+  parsedAll.forEach(r => { (byPatient[r.player_key] = byPatient[r.player_key]||[]).push(r); });
+  DATA.demoByPatient = byPatient;
+  const hubRows = Object.keys(byPatient).map(key=>{
+    const sessions = buildSessions(byPatient[key]);
+    const p = buildPatients(sessions)[0];
+    if (!p) return null;
+    const ser = k => JSON.stringify(p.sessions.filter(s=>s.valid).map(s=>s[k]).filter(v=>v!=null).slice(-14));
+    return {
+      player_key:key, display_name:p.name, note:p.last.note||'', side:p.side, posture:p.posture,
+      file_id:'demo:'+key, file_url:'', first_ts:p.sessions[0].ts, last_ts:p.last.ts,
+      n_sessions:p.n, n_valid:p.nValid, last_score:p.last.score, updated_at:new Date().toISOString(),
+      m_path_ratio:ser('pathRatio'), m_submoves:ser('submoves'), m_move_ms:ser('moveMs'), m_drop_err_pct:ser('dropErr')
+    };
+  }).filter(Boolean);
+  ingestRoster(hubRows, 'demo');
+}
+
 async function reload(){
   if (!CFG.url){ $('cfg').classList.remove('hidden'); return; }
   $('btnReload').disabled=true; $('btnReload').textContent='กำลังโหลด…';
-  try{ const d=await loadFromSheet(); ingest(d.rows,'sheet'); }
+  try{ ingestRoster(await loadRoster(), 'sheet'); }
   catch(e){
-    renderAll();
-    const url = CFG.url.trim() + '?action=data';
-    showError('โหลดข้อมูลไม่สำเร็จ — ' + e.message, url, e.code);
+    ingestRoster([], 'sheet');
+    showError('โหลดข้อมูลไม่สำเร็จ — ' + e.message, CFG.url.trim()+'?action=roster', e.code);
   }
   finally{ $('btnReload').disabled=false; $('btnReload').textContent='↻ โหลดใหม่'; }
 }
 
 /* boot */
-if (CFG.url) reload(); else { ingest(demoRows(),'demo'); $('cfg').classList.remove('hidden'); }
+if (CFG.url) reload(); else { loadDemo(); $('cfg').classList.remove('hidden'); }
 </script>
 </body>
 </html>

@@ -19,7 +19,7 @@ window.APP_CONFIG = {
      Apps Script ▸ Deploy ▸ Web app ▸ Execute as: Me ▸ Who has access: Anyone
      Paste the URL that ends in /exec (not /dev).
      ----------------------------------------------------------------------- */
-  endpoint : 'https://script.google.com/macros/s/AKfycbx-ms2fnyijVnDhKK6szcUsfRce7HOivr0B_nOWGvxYiMa9q7NEdbe4lgJXt5FA1nhuYg/exec',
+  endpoint : 'https://script.google.com/macros/s/AKfycbzsHrfKYQO5urAbDdT26K7i1y2THAbmCgVENLb1veYD7yH3u485GwLoIv3tvj-fJIo8BA/exec',
 
   /* Only if you set READ_KEY in apps_script_stats.gs. Note this is visible to
      anyone who views the page source — it deters casual access, nothing more. */
@@ -30,15 +30,15 @@ window.APP_CONFIG = {
 
   /* Satisfaction survey shown on the end screen. Paste a Google Form link
      (the "Send ▸ 🔗 link" URL). Leave '' and the button is hidden.
- 
+
      Tip: a Form can be pre-filled from the URL. Get a prefilled link via
      Google Forms ▸ ⋮ ▸ Get pre-filled link, then paste the entry.xxxxx id
      below and the game will pass the player's name through automatically,
      so the patient does not have to type it twice.                        */
   survey: {
-    url        : 'https://docs.google.com/forms/d/e/1FAIpQLSdYeMV0lco5eTKzyoFMo3QPdYY_7hZpexlrsSOqvP8JWgBegA/viewform',     // e.g. 'https://docs.google.com/forms/d/e/XXXX/viewform'
-    nameField  : 'entry.1022541388',     // e.g. 'entry.1234567890'  (optional)
-    sidField   : 'entry.1333325407'      // e.g. 'entry.0987654321'  (optional, links the form to the session)
+    url        : '',     // e.g. 'https://docs.google.com/forms/d/e/XXXX/viewform'
+    nameField  : '',     // e.g. 'entry.1234567890'  (optional)
+    sidField   : ''      // e.g. 'entry.0987654321'  (optional, links the form to the session)
   },
 
 
@@ -145,8 +145,10 @@ window.APP_CONFIG = {
      4. DASHBOARD
      ----------------------------------------------------------------------- */
   dashboard: {
-    /* Days of history to request. '' = everything. */
-    sinceDays : 90,
+    /* Days of history to request when a patient is opened. '' = everything.
+       Each patient has their own file now, so their history is small — the
+       default is 'show it all', unlike a shared log that needed a window. */
+    sinceDays : '',
 
     /* Hide patient names by default — useful on a shared or projected screen. */
     maskNames : false,

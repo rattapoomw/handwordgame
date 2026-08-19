@@ -1795,6 +1795,7 @@ function loop(now){
    comparable; `screen` keeps the raw pixel size for reference.
    ========================================================================= */
 const APP_VERSION = '2.0-rehab';
+const APP_GAME    = 'thai_sentence';   // distinguishes this game's rows in a patient's shared file
 const STATS = {
   URL : CF('upload', true) ? CF('endpoint','') : '',   // set in config.js
   QKEY: 'thaiAR.queue.v2',        // pending rows (cleared after a send attempt)
@@ -1803,7 +1804,7 @@ const STATS = {
   session:null, round:null
 };
 const STAT_COLS = [
-  'rid','type','ts','sid','player_key','display_name','note','side','posture',
+  'rid','type','game','ts','sid','player_key','display_name','note','side','posture',
   'round','stage','q','mv',
   'sent_id','sent_th','n_words','card_th','grasp',
   'plan_ms','solve_ms','move_ms','grasp_ms',
@@ -1847,7 +1848,7 @@ STATS.start = function(){
 };
 STATS.base = function(){
   const s = this.session || {sid:''};
-  return { ts:new Date().toISOString(), sid:s.sid,
+  return { ts:new Date().toISOString(), sid:s.sid, game:APP_GAME,
     player_key:PLAYER.key, display_name:PLAYER.name, note:PLAYER.note,
     side:PLAYER.side, posture:PLAYER.posture, reveal:PLAYER.reveal ? 1 : 0,
     screen:`${G.W}x${G.H}`, ua:navigator.userAgent.slice(0,110),
@@ -1986,7 +1987,8 @@ STATS.verify = function(rid){
     function done(v){ clearTimeout(t); delete window[cb]; el.remove(); res(v); }
     window[cb] = d => done(!!(d && d.ok && d.found));
     el.onerror = ()=>done(false);
-    el.src = this.URL + '?action=has&rid=' + encodeURIComponent(rid) + '&callback=' + cb;
+    el.src = this.URL + '?action=has&rid=' + encodeURIComponent(rid)
+           + '&player_key=' + encodeURIComponent(PLAYER.key) + '&callback=' + cb;
     document.head.appendChild(el);
   });
 };
@@ -2374,6 +2376,10 @@ function updateSyncChip(){
   c.className = 'glass rounded-xl px-3 py-2 text-sm font-semibold hover:bg-white/20 transition ' + cls;
   c.textContent = txt;
   c.title = S.lastErr || (S.lastOk ? 'ส่งสำเร็จล่าสุด ' + new Date(S.lastOk).toLocaleTimeString('th-TH') : '');
+  /* show the time of the last confirmed upload, so it is obvious the Sheet is
+     live rather than something that only syncs at the end of a session       */
+  if (S.state==='ok' && S.lastOk)
+    c.textContent = '☁️ ' + new Date(S.lastOk).toLocaleTimeString('th-TH',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
 
   const e = document.getElementById('syncEnd');
   if (e){
