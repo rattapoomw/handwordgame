@@ -54,7 +54,7 @@ var HEADERS = ['rid','type','game','ts','sid','player_key','display_name',
    of truth. Opening a patient re-reads their real file and recomputes fresh. */
 var HUB_HEADERS = ['player_key','display_name','note','side','posture',
                     'file_id','file_url','first_ts','last_ts','n_sessions','n_valid',
-                    'last_score','updated_at','m_path_ratio','m_submoves','m_move_ms','m_drop_err_pct'];
+                    'last_score','last_sid','updated_at','m_path_ratio','m_submoves','m_move_ms','m_drop_err_pct'];
 
 /* Mirrors the dashboard's default quality gates (config.js `dashboard.gates`)
    closely enough for a fast preview. If you change those, update here too —
@@ -129,7 +129,10 @@ function writePatientBatch(playerKey, rows) {
     sheet.getRange(sheet.getLastRow() + 1, 1, out.length, HEADERS.length).setValues(out);
   }
 
-  updateHubRow(ss, playerKey, rows, pf);
+  // updateHubRow must see only rows that were ACTUALLY new — passing the raw
+  // `rows` here would double-count a session whenever a retry resends an
+  // already-appended batch (the append below already ignores such repeats).
+  updateHubRow(ss, playerKey, fresh, pf);
   return { ok: true, n: out.length, fileId: pf.fileId };
 }
 
@@ -189,7 +192,10 @@ function updateHubRow(ss, playerKey, rows, pf) {
     rows.forEach(function (r) { if (r.type === 'session') sessionRow = r; });
 
     var patch = { last_ts: latestTs, updated_at: new Date() };
-    if (sessionRow) {
+    // second, independent guard: even a genuinely-fresh row can't move the
+    // counter twice for the same session id, regardless of rid dedupe above
+    if (sessionRow && sessionRow.sid && String(sessionRow.sid) !== String(rec.last_sid || '')) {
+      patch.last_sid = sessionRow.sid;
       patch.n_sessions = (Number(rec.n_sessions) || 0) + 1;
       if (sessionRow.score !== undefined) patch.last_score = sessionRow.score;
       if (sessionRow.display_name) patch.display_name = sessionRow.display_name;
@@ -267,7 +273,7 @@ function safeArr(s) { try { var a = JSON.parse(s); return Array.isArray(a) ? a :
    ========================================================================= */
 function doGet(e) {
   var p = (e && e.parameter) || {};
-  var ACTIONS = ['roster', 'data', 'has', 'deletePatient'];
+  var ACTIONS = ['roster', 'data', 'has', 'deletePatient', 'resync'];
   if (ACTIONS.indexOf(p.action) < 0) {
     return ContentService.createTextOutput('AR rehab stats endpoint is running.');
   }
@@ -278,6 +284,7 @@ function doGet(e) {
     if (p.action === 'roster')            out = actionRoster(ss);
     else if (p.action === 'data')         out = actionData(ss, p);
     else if (p.action === 'has')          out = actionHas(ss, p);
+    else if (p.action === 'resync')       out = actionResync(ss, p);
     else                                    out = actionDeletePatient(ss, p);
   } catch (err) {
     out = { ok: false, error: String(err) };
@@ -293,6 +300,70 @@ function actionRoster(ss) {
     return r.map(function (v) { return v instanceof Date ? v.toISOString() : v; });
   });
   return { ok: true, columns: HUB_HEADERS, rows: rows };
+}
+
+/* Rebuild one patient's hub summary from scratch, reading their real file.
+   Ignores whatever the cache currently says — this is the repair tool for
+   exactly the kind of drift the old bug above caused. Non-destructive: it
+   only touches the cached summary, never the patient's actual log.        */
+function actionResync(ss, p) {
+  if (!p.player_key) throw new Error('player_key required');
+  var hub = hubSheet(ss);
+  var rec = findHubRow(hub, p.player_key);
+  if (!rec) throw new Error('no such patient');
+
+  var pfile = SpreadsheetApp.openById(rec.file_id);
+  var sh = pfile.getSheetByName(LOG_TAB) || pfile.getSheets()[0];
+  if (sh.getLastRow() < 2) return { ok: true, resynced: p.player_key, n_sessions: 0, n_valid: 0 };
+
+  var values = sh.getRange(2, 1, sh.getLastRow() - 1, HEADERS.length).getValues();
+  var typeCol = HEADERS.indexOf('type'), sidCol = HEADERS.indexOf('sid'), tsCol = HEADERS.indexOf('ts');
+
+  // one entry per DISTINCT session id — if a session row was ever duplicated
+  // (the bug this repairs), the later copy simply overwrites the earlier one
+  // here rather than being counted twice
+  var bySid = {}, order = [];
+  values.forEach(function (r) {
+    if (r[typeCol] !== 'session') return;
+    var sid = String(r[sidCol]);
+    if (!bySid[sid]) order.push(sid);
+    bySid[sid] = r;
+  });
+  order.sort(function (a, b) { return String(bySid[a][tsCol]).localeCompare(String(bySid[b][tsCol])); });
+
+  var spark = { path_ratio: [], submoves: [], move_ms: [], drop_err_pct: [] }, nValid = 0;
+  order.forEach(function (sid) {
+    var row = bySid[sid];
+    var sessionObj = {}; HEADERS.forEach(function (h, i) { sessionObj[h] = row[i]; });
+    var m = computeSessionMetrics(sh, sid, sessionObj);
+    if (m) {
+      nValid++;
+      spark.path_ratio.push(m.path_ratio); spark.submoves.push(m.submoves);
+      spark.move_ms.push(m.move_ms); spark.drop_err_pct.push(m.drop_err_pct);
+    }
+  });
+  ['path_ratio', 'submoves', 'move_ms', 'drop_err_pct'].forEach(function (k) {
+    if (spark[k].length > SPARK_CAP) spark[k] = spark[k].slice(spark[k].length - SPARK_CAP);
+  });
+
+  var last = order.length ? bySid[order[order.length - 1]] : null;
+  var scoreCol = HEADERS.indexOf('score');
+  var patch = {
+    n_sessions: order.length, n_valid: nValid, updated_at: new Date(),
+    m_path_ratio: JSON.stringify(spark.path_ratio), m_submoves: JSON.stringify(spark.submoves),
+    m_move_ms: JSON.stringify(spark.move_ms), m_drop_err_pct: JSON.stringify(spark.drop_err_pct)
+  };
+  if (last) {
+    patch.last_sid = String(last[sidCol]);
+    patch.last_ts = last[tsCol];
+    if (last[scoreCol] !== '') patch.last_score = last[scoreCol];
+  }
+  var range = hub.getRange(rec._row, 1, 1, HUB_HEADERS.length);
+  var current = range.getValues()[0];
+  HUB_HEADERS.forEach(function (h, i) { if (patch[h] !== undefined) current[i] = patch[h]; });
+  range.setValues([current]);
+
+  return { ok: true, resynced: p.player_key, n_sessions: order.length, n_valid: nValid };
 }
 
 function actionData(ss, p) {
@@ -382,7 +453,7 @@ function appendHubRow(hub, playerKey, sampleRow, fileId, url) {
   rec.posture = (sampleRow && sampleRow.posture) || '';
   rec.file_id = fileId; rec.file_url = url;
   rec.first_ts = now; rec.last_ts = now;
-  rec.n_sessions = 0; rec.n_valid = 0; rec.last_score = '';
+  rec.n_sessions = 0; rec.n_valid = 0; rec.last_score = ''; rec.last_sid = '';
   rec.updated_at = now;
   rec.m_path_ratio = '[]'; rec.m_submoves = '[]'; rec.m_move_ms = '[]'; rec.m_drop_err_pct = '[]';
   hub.appendRow(HUB_HEADERS.map(function (h) { return rec[h]; }));
