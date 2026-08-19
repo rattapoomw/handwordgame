@@ -19,7 +19,7 @@ window.APP_CONFIG = {
      Apps Script ▸ Deploy ▸ Web app ▸ Execute as: Me ▸ Who has access: Anyone
      Paste the URL that ends in /exec (not /dev).
      ----------------------------------------------------------------------- */
-  endpoint : 'https://script.google.com/macros/s/AKfycbzsHrfKYQO5urAbDdT26K7i1y2THAbmCgVENLb1veYD7yH3u485GwLoIv3tvj-fJIo8BA/exec',
+  endpoint : 'https://script.google.com/macros/s/AKfycbzj4p-j95o0I6JBBNRA--j5Hijo8326y_zClghidz54bGY0s1229s6Qc7VtjoptwYuk/exec',
 
   /* Only if you set READ_KEY in apps_script_stats.gs. Note this is visible to
      anyone who views the page source — it deters casual access, nothing more. */
