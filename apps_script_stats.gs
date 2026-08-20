@@ -477,6 +477,17 @@ function json_(out) { return ContentService.createTextOutput(JSON.stringify(out)
 
 /* JSONP when a callback is given (the dashboard is on another origin), plain
    JSON otherwise. */
+/* Response.
+
+   NOTE ON CORS: ContentService offers no way to set response headers, so this
+   script cannot emit Access-Control-Allow-Origin itself. In practice Google's
+   own serving layer attaches a permissive CORS header to /exec responses, so a
+   cross-origin fetch() from the dashboard usually CAN read the body — which is
+   why the dashboard now prefers fetch() (no Google cookies attached) and keeps
+   JSONP only as a fallback. If a future Google change breaks the fetch path,
+   the dashboard falls back automatically; nothing here needs editing.
+
+   JSONP when a callback is given, plain JSON otherwise. */
 function reply(out, p) {
   var json = JSON.stringify(out);
   if (p.callback) {

@@ -155,6 +155,12 @@ tbody tr.click:hover{background:#FAFCFC;cursor:pointer}
       <input id="cfgUrl" placeholder="https://script.google.com/macros/s/…/exec" /></label>
     <label class="fld"><span>รหัสอ่านข้อมูล (ถ้าตั้ง READ_KEY ไว้)</span>
       <input id="cfgKey" placeholder="ไม่บังคับ" /></label>
+    <label class="fld"><span>วิธีเรียกข้อมูล (สำหรับแก้ปัญหาเชื่อมต่อ)</span>
+      <select id="cfgTransport">
+        <option value="auto">อัตโนมัติ — ลอง fetch ก่อน (แนะนำ)</option>
+        <option value="fetch">fetch เท่านั้น (ไม่แนบบัญชี Google)</option>
+        <option value="jsonp">jsonp เท่านั้น (แบบเดิม)</option>
+      </select></label>
     <label class="fld"><span>ช่วงเวลา</span>
       <select id="cfgSince">
         <option value="">ทั้งหมด</option><option value="30">30 วันล่าสุด</option>
@@ -471,6 +477,8 @@ const CFG = {
      architecture (nothing fragments them). Blank = all history.           */
   get since(){ return ov('dash.since', String(CF('dashboard.sinceDays', ''))); },
   set since(v){ localStorage.setItem('dash.since', v); },
+  get transport(){ return localStorage.getItem('dash.transport') || 'auto'; },
+  set transport(v){ localStorage.setItem('dash.transport', v); },
   get fromConfig(){ return localStorage.getItem('dash.url') === null && !!CF('endpoint',''); },
   clearOverrides(){ ['dash.url','dash.key','dash.since'].forEach(k=>localStorage.removeItem(k)); }
 };
@@ -486,6 +494,65 @@ const STATE = { view:'caseload', patient:null, session:null,
      onerror            → the URL is wrong / not reachable
      onload but no call → it responded, but not as JSONP  ⇒ stale deployment
      neither            → timeout                                            */
+/* ---------------------------------------------------------------------------
+   Transport.
+
+   The GAME writes with fetch() and has never failed on any account, network
+   or device. The DASHBOARD used JSONP — a <script src> tag — and failed in a
+   pattern that tracked network and device rather than permissions. The reason
+   is that a <script src> sends whatever Google sign-in cookies the browser
+   holds (Google sets them SameSite=None so they travel cross-site), whereas
+   fetch() defaults to credentials:'omit' cross-origin and therefore carries
+   no identity at all. An identity-bearing request gets an extra Drive-style
+   permission check that an anonymous one skips.
+
+   So: try fetch() FIRST (same mechanism the game proves works), and fall back
+   to JSONP only if fetch is unusable — Apps Script is historically
+   inconsistent about returning the CORS header fetch() needs to read a body,
+   so the fallback stays as a safety net rather than being deleted.
+--------------------------------------------------------------------------- */
+let TRANSPORT = { mode:'auto', last:'' };    // 'auto' | 'fetch' | 'jsonp'
+                                            // overridable from the settings dialog
+
+async function apiGet(url, timeout=25000){
+  const prefer = TRANSPORT.mode;
+  if (prefer !== 'jsonp'){
+    try{
+      const d = await fetchGet(url, timeout);
+      TRANSPORT.last = 'fetch';
+      return d;
+    }catch(e){
+      // a real server-side error (ok:false) is NOT a transport failure — don't
+      // retry it over JSONP, the answer would be identical
+      if (e && e.serverError) throw e;
+      if (prefer === 'fetch') throw e;
+      console.warn('fetch failed, falling back to JSONP:', e.message);
+    }
+  }
+  const d = await jsonp(url, timeout);
+  TRANSPORT.last = 'jsonp';
+  return d;
+}
+
+/* credentials:'omit' is the whole point — no Google identity attached */
+function fetchGet(url, timeout=25000){
+  const ctrl = new AbortController();
+  const t = setTimeout(()=>ctrl.abort(), timeout);
+  return fetch(url, { method:'GET', credentials:'omit', redirect:'follow', signal:ctrl.signal })
+    .then(async r=>{
+      clearTimeout(t);
+      if (!r.ok) throw err2('HTTP ' + r.status);
+      const text = await r.text();
+      let d;
+      try{ d = JSON.parse(text); }
+      catch(_){ throw err2('ตอบกลับไม่ใช่ JSON (อาจเป็นสคริปต์เวอร์ชันเก่า)'); }
+      if (d && d.ok === false){ const e = err2(d.error || 'server refused'); e.serverError = true; throw e; }
+      return d;
+    })
+    .catch(e=>{ clearTimeout(t); throw e; });
+}
+function err2(m){ return new Error(m); }
+
 function jsonp(url, timeout=25000){
   return new Promise((res, rej)=>{
     const cb = 'dashcb_' + Math.random().toString(36).slice(2);
@@ -518,7 +585,7 @@ async function loadRoster(){
   if (!CFG.url) throw new Error('ยังไม่ได้ตั้งค่า URL');
   let u = CFG.url.trim() + '?action=roster';
   if (CFG.key) u += '&key=' + encodeURIComponent(CFG.key);
-  const d = await jsonp(u);
+  const d = await apiGet(u);
   if (!d || !d.ok) throw new Error((d && d.error) || 'endpoint ตอบกลับผิดพลาด');
   return parseRows(d.columns, d.rows);
 }
@@ -532,7 +599,7 @@ async function loadPatientRows(playerKey){
     const d0 = new Date(Date.now() - (+CFG.since)*864e5).toISOString().slice(0,10);
     u += '&since=' + d0;
   }
-  const d = await jsonp(u, 30000);
+  const d = await apiGet(u, 30000);
   if (!d || !d.ok) throw new Error((d && d.error) || 'โหลดข้อมูลผู้ป่วยไม่สำเร็จ');
   return parseRows(d.columns, d.rows);
 }
@@ -831,7 +898,8 @@ function renderRail(){
   $('plist').querySelectorAll('button').forEach(b=>b.onclick=()=>openPatient(b.dataset.key));
   $('railfoot').innerHTML = DATA.loadedAt
     ? `โหลดรายชื่อเมื่อ ${THTIME(DATA.loadedAt)} · ${DATA.patients.length.toLocaleString()} คน<br>
-       ${DATA.source==='sheet'?'Google Sheet (แยกไฟล์ต่อผู้ป่วย)':DATA.source==='csv'?'ไฟล์ CSV':'ข้อมูลตัวอย่าง'}`
+       ${DATA.source==='sheet'?'Google Sheet (แยกไฟล์ต่อผู้ป่วย)':DATA.source==='csv'?'ไฟล์ CSV':'ข้อมูลตัวอย่าง'}${
+         DATA.source==='sheet' && TRANSPORT.last ? ` · ผ่าน ${TRANSPORT.last}` : ''}`
     : 'ยังไม่ได้โหลดข้อมูล';
 }
 
@@ -1321,6 +1389,7 @@ $('btnMask').onclick=()=>{ STATE.masked=!STATE.masked;
 
 $('btnCfg').onclick=()=>{
   $('cfgUrl').value=CFG.url; $('cfgKey').value=CFG.key; $('cfgSince').value=CFG.since;
+  $('cfgTransport').value=CFG.transport;
   $('cfgSrc').innerHTML = CFG.fromConfig
     ? '✓ ค่าเริ่มต้นมาจากไฟล์ <span class="mono">config.js</span> — แก้ที่นี่จะบันทึกทับเฉพาะเครื่องนี้'
     : (CF('endpoint','')
@@ -1333,6 +1402,7 @@ $('btnCfg').onclick=()=>{
 $('cfgClose').onclick=()=>$('cfg').classList.add('hidden');
 $('cfgSave').onclick=async()=>{
   CFG.url=$('cfgUrl').value.trim(); CFG.key=$('cfgKey').value.trim(); CFG.since=$('cfgSince').value;
+  CFG.transport=$('cfgTransport').value; TRANSPORT.mode=CFG.transport;
   $('cfg').classList.add('hidden'); await reload();
 };
 $('cfgDemo').onclick=()=>{ $('cfg').classList.add('hidden'); loadDemo(); };
@@ -1346,9 +1416,9 @@ $('cfgTest').onclick=async()=>{
   let u=url+'?action=roster'; const k=$('cfgKey').value.trim();
   if (k) u+='&key='+encodeURIComponent(k);
   try{
-    const d=await jsonp(u, 15000);
+    const d=await apiGet(u, 15000);
     if (!d.ok) throw new Error(d.error||'endpoint ตอบกลับว่าไม่สำเร็จ');
-    box.innerHTML=`<span style="color:var(--teal)">✓ เชื่อมต่อได้</span> —
+    box.innerHTML=`<span style="color:var(--teal)">✓ เชื่อมต่อได้</span> (ผ่าน <b>${TRANSPORT.last}</b>) —
       ผู้ป่วย ${d.rows.length.toLocaleString()} คน · ${d.columns.length} คอลัมน์
       ${d.columns.includes('m_path_ratio')?'':'<br><span style="color:var(--clay)">⚠️ ไม่พบคอลัมน์ m_path_ratio — สคริปต์ยังเป็นรุ่นเก่า ให้ deploy เวอร์ชันใหม่</span>'}`;
   }catch(e){
@@ -1381,7 +1451,7 @@ async function adminCall(action, extra){
   if (CFG.key) u += '&key=' + encodeURIComponent(CFG.key);
   for (const k in (extra||{})) u += '&' + k + '=' + encodeURIComponent(extra[k]);
   try{
-    const d = await jsonp(u, 30000);
+    const d = await apiGet(u, 30000);
     if (!d || !d.ok) throw new Error((d && d.error) || 'ไม่สำเร็จ');
     return d;
   }catch(e){ admSay('ไม่สำเร็จ: ' + esc(e.message), true); return null; }
@@ -1395,7 +1465,7 @@ $('btnResync').onclick=async()=>{
   if (CFG.key) u += '&key=' + encodeURIComponent(CFG.key);
   admSay('กำลังซิงก์…');
   try{
-    const d = await jsonp(u, 20000);
+    const d = await apiGet(u, 20000);
     if (!d || !d.ok) throw new Error((d && d.error) || 'ไม่สำเร็จ');
     admSay(`ซิงก์แล้ว — จำนวนครั้งที่ถูกต้องคือ ${d.n_sessions} (ใช้คำนวณได้ ${d.n_valid}) · จะเห็นตัวเลขใหม่ในหน้ารายชื่อผู้ป่วยเมื่อโหลดใหม่ครั้งถัดไป`);
   }catch(e){ admSay('ไม่สำเร็จ: ' + esc(e.message), true); }
@@ -1478,6 +1548,7 @@ async function reload(){
 }
 
 /* boot */
+TRANSPORT.mode = CFG.transport;
 if (CFG.url) reload(); else { loadDemo(); $('cfg').classList.remove('hidden'); }
 </script>
 </body>
